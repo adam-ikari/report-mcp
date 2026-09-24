@@ -1,0 +1,7 @@
+node_modules/
+dist/
+public/demo-data.js
+test/.tmp-home/
+test/.tmp-smoke/
+*.log
+.DS_Store
