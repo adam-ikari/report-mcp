@@ -181,6 +181,21 @@ error 级会进 `lastError`，在 run 列表里挂红色 `err` 角标。
 
 所有 agent 提交的文本都经过 HTML 转义后再插入 DOM。
 
+### 双模式：同一个文件既能连后端，也能当静态站
+
+启动时先探 `/api/runs`（要求 200 + `application/json`）：
+
+| 探测结果 | 模式 | 行为 |
+|---|---|---|
+| 有后端 | **live** | 走 REST + SSE，实时，`homePath` 显示存储路径 |
+| 没后端 | **static** | 加载同目录 `demo-data.js`，纯内存渲染；左上角挂紫色 `DEMO` 角标 |
+
+static 模式**不发任何 `/api` 请求、不开 EventSource、不跑轮询**（三者都有测试断言盯着）。
+
+demo bundle 只带原始 `records`，`RunSummary` 依然由页面里同一个 `derive()` 算——live 和 static 不可能算出两套状态。`demo-data.js` 由 `scripts/build-demo.mjs` 生成（**零依赖**，只 import `test/fixtures.mjs`），因此生成物不入库，Pages 工作流在部署前现做一份，顺带保证里面的相对时间永远是新鲜的。
+
+`loadDemo()` 带 2s 超时兜底：脚本标签卡住不会把整个面板吊死在启动阶段，超时就按「没有 demo 数据」进空状态。
+
 ---
 
 ## 6. HTTP API
@@ -269,7 +284,28 @@ error 级会进 `lastError`，在 run 列表里挂红色 `err` 角标。
 
 ---
 
-## 11. 开发
+## 11. 网站发布（GitHub Pages）
+
+静态 demo 站已上线：**<https://adam-ikari.github.io/report-mcp/>**
+
+它展示的是 fixture 样例数据，不是你的实时汇报——真正的实时面板仍走 §8 的本机接入。两者共用同一个 `public/index.html`，靠 §5 的双模式区分。
+
+发布链路 `.github/workflows/pages.yml`：
+
+```
+push → test(4 套件 94 断言) → build(生成 demo bundle + 上传 public/) → deploy
+```
+
+- **测试是发布门禁**：测试红了就不部署。
+- **产物只有 `public/`**，13 个文件、几十 kB，没有 `dist/`、没有依赖、没有源码里的密钥面。
+- demo bundle 在 CI 里现生成，所以 `npm test` 反复跑不会把 git 弄脏（`public/demo-data.js` 在 `.gitignore` 里）。
+- 仓库必须是 public 才能用免费 Pages；面板本身**不含**任何真实运行数据。
+
+手动重发：仓库 → Actions → `Deploy panel demo to GitHub Pages` → `Run workflow`。
+
+---
+
+## 12. 开发
 
 ```bash
 npm install
@@ -278,13 +314,16 @@ npm start           # 起一个空 run（用于手动连）
 npm test            # 构建 + 造数据 + 起面板 + 三个套件
 ```
 
-`npm test` 覆盖 78 条断言，分三套：
+`npm test` 覆盖 94 条断言，分四套：
 
 | 套件 | 验证什么 |
 |---|---|
 | `test/smoke.mjs` | MCP 握手、7 个 tool 逐一调用、seq 连续、HTTP API、404、SSE 推送、**stdout 只有 JSON-RPC** |
 | `test/render.mjs` | jsdom 里真实渲染：侧栏、头部、时间线 13 条记录、成果卡片、筛选、切换 run、XSS 转义、离线降级 |
 | `test/live.mjs` | 带 EventSource shim：**在窗口外直接往 JSONL 追加记录，断言 DOM 在 700ms 内更新**，含状态翻转与筛选 |
+| `test/static.mjs` | **无后端路径**（即 Pages 环境）：探测到没有后端、挂 DEMO 角标、从 demo bundle 渲染 13 条记录与成果卡片、不开 SSE；以及 bundle 缺失时落到空状态 |
+
+部署后另有**线上核验**：`node test/verify-pages.mjs`，对 `<https://adam-ikari.github.io/report-mcp/>` 起 jsdom 断言 25 项（深链、成果卡片、筛选、无尾斜杠入口）。它**故意不进 `npm test`**——把发布门禁挂在别人家的 CDN 上，等于给自己装了一个会随机变红的闸机。
 
 ### 目录
 
@@ -292,12 +331,20 @@ npm test            # 构建 + 造数据 + 起面板 + 三个套件
 src/
   index.ts    入口：起面板 → 建 MCP server → 接 stdio，处理退出清理
   server.ts   7 个 tool 的 zod schema 与 handler
-  store.ts    RunWriter(append/seq 同步) + summarize(派生) + 文件监听 + 面板状态
-  panel.ts    HTTP 路由、SSE、按文件 watch、增量 tail、兜底 sweep
+  store.ts    RunWriter(append/seq 同步) + summarize(派生) + 按文件 watch + 面板状态
+  panel.ts    HTTP 路由、SSE、增量 tail、兜底 sweep
   types.ts    六种记录的判别联合 + RunSummary
 public/
-  index.html  面板（单文件，无依赖）
+  index.html       面板（单文件，无依赖，live/static 双模式）
+  demo-data.js     生成物，不入库（scripts/build-demo.mjs 产出）
+scripts/
+  build-demo.mjs   从 fixtures 生成 demo bundle，零依赖
+.github/workflows/
+  pages.yml        测试门禁 → 生成 bundle → 部署 Pages
 test/
-  run.mjs     测试编排   seed.mjs  造三组 fixture
-  smoke.mjs / render.mjs / live.mjs
+  run.mjs          测试编排（起面板、依次跑四套件、清理）
+  fixtures.mjs     三组 fixture，测试与 demo 共用同一来源
+  seed.mjs         把 fixtures 写成 JSONL
+  smoke.mjs / render.mjs / live.mjs / static.mjs
+  verify-pages.mjs   部署后线上核验（手动，不进 npm test）
 ```
