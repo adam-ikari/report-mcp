@@ -25,6 +25,18 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      # dist/ is committed so git installs work without devDependencies (a
+      # global install never gets `tsc`). tsc output is deterministic, so any
+      # drift means src/ changed without a rebuild — fail rather than ship a
+      # package whose bin runs yesterday's code.
+      - name: Committed dist/ must match src/
+        run: |
+          if [ -n "$(git status --porcelain -- dist)" ]; then
+            echo "::error::dist/ is out of sync with src/. Run 'npm run build' and commit it."
+            git status --porcelain -- dist
+            git diff -- dist
+            exit 1
+          fi
 
   build:
     needs: test
