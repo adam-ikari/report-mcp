@@ -14,11 +14,23 @@ agent ──report_* tools──▶ MCP(stdio) ──▶ JSONL 落盘 ──▶ 
 ## 安装
 
 ```bash
-npm install -g git+https://github.com/adam-ikari/report-mcp.git
+npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp.git
 report-mcp --version    # report-mcp 0.1.0
 ```
 
 约 20 秒，装完只保留生产依赖。
+
+::: warning `--install-links=true` 不能省
+默认值是 `false`，npm 会把 git 依赖**软链**到 `~/.npm/_cacache/tmp/` 下的克隆目录，而该临时目录在装完就被删除——结果是一条悬空链接：`report-mcp` 报 `command not found`，`npm ls` 里版本显示为空。加上这个 flag，npm 才会真正解包成独立目录。
+
+装完可用这两条确认：
+
+```bash
+ls -ld "$(npm root -g)/report-mcp"   # 应是普通目录，后面没有 "-> ..."
+report-mcp --version                 # report-mcp 0.1.0
+```
+
+:::
 
 ::: tip 分发渠道是 Git
 仓库**不提交** `public/demo-data.js`——fixture 的时间戳是相对 `Date.now()` 的，只有在安装/部署那一刻生成，Demo 里的相对时间（「3 分钟前」）才准。这由 `prepare` 钩子完成，它是**零依赖**的。

@@ -233,7 +233,7 @@ demo bundle 只带原始 `records`，`RunSummary` 依然由页面里同一个 `d
 ### 安装
 
 ```bash
-npm install -g git+https://github.com/adam-ikari/report-mcp.git
+npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp.git
 report-mcp --version    # report-mcp 0.1.0
 ```
 
@@ -242,6 +242,8 @@ report-mcp --version    # report-mcp 0.1.0
 - `dist/` **入库** —— 全局安装拿不到 devDependencies，没有 `tsc` 可跑。CI 会比对 `dist/` 与 `src/` 的构建结果，不一致就红，避免装到昨天的代码
 - `public/demo-data.js` **不入库** —— fixture 时间戳是相对 `Date.now()` 的，由 `prepare` 钩子（零依赖）在安装时现生成，Demo 里的相对时间才准
 
+> `--install-links=true` **不能省**：默认值 `false` 会让 npm 把 git 依赖软链到 `~/.npm/_cacache/tmp/` 的临时克隆目录，装完该目录被删除，只剩悬空链接——`report-mcp: command not found`。
+>
 > npm registry 尚未发布，`npm install -g report-mcp` 会 404。
 
 ### MCP 客户端配置
