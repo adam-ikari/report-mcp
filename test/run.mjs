@@ -5,6 +5,8 @@
  *   npm test          build + seed fixtures + start a panel + run all suites
  *
  * Suites, in order (render must run before live mutates a fixture run):
+ *   e2e.mjs    tool call → process boundary → panel DOM, incl. two writers
+ *              sharing one run and a SIGKILL/restart. Own home and ports.
  *   smoke.mjs  MCP stdio handshake, every tool, HTTP API, SSE delivery, stdout purity
  *   render.mjs panel rendering in jsdom: sidebar, header, timeline, filters, switching
  *   live.mjs   append records to the JSONL out-of-band and assert the DOM updates live
@@ -19,6 +21,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = path.join(here, "..", "dist", "index.js");
 const HOME = path.join(here, ".tmp-home");
 const SMOKE_HOME = path.join(here, ".tmp-smoke");
+const E2E_HOME = path.join(here, ".tmp-e2e");
 const PORT = Number(process.env.TEST_PANEL_PORT || 7788);
 const ORIGIN = `http://127.0.0.1:${PORT}`;
 
@@ -37,6 +40,7 @@ if (!fs.existsSync(SERVER)) {
 
 fs.rmSync(HOME, { recursive: true, force: true });
 fs.rmSync(SMOKE_HOME, { recursive: true, force: true });
+fs.rmSync(E2E_HOME, { recursive: true, force: true });
 
 const env = {
   ...process.env,
@@ -69,7 +73,7 @@ if (!up) {
 }
 console.log(`panel ready: ${ORIGIN}`);
 
-const suites = ["render.mjs", "live.mjs", "smoke.mjs", "static.mjs"];
+const suites = ["e2e.mjs", "render.mjs", "live.mjs", "smoke.mjs", "static.mjs"];
 const failed = [];
 for (const s of suites) {
   console.log(`\n=== ${s} ===`);
@@ -80,6 +84,7 @@ for (const s of suites) {
 server.kill("SIGKILL");
 fs.rmSync(HOME, { recursive: true, force: true });
 fs.rmSync(SMOKE_HOME, { recursive: true, force: true });
+fs.rmSync(E2E_HOME, { recursive: true, force: true });
 
 console.log(failed.length ? `\nFAILED: ${failed.join(", ")}` : "\nall suites passed");
 process.exit(failed.length ? 1 : 0);

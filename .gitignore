@@ -3,5 +3,6 @@ dist/
 public/demo-data.js
 test/.tmp-home/
 test/.tmp-smoke/
+test/.tmp-e2e/
 *.log
 .DS_Store

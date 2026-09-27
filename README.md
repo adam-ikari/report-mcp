@@ -252,7 +252,7 @@ demo bundle 只带原始 `records`，`RunSummary` 依然由页面里同一个 `d
 
 **为什么是单向的。** 用户明确不需要阻塞审批。单向让整条链路没有分布式状态：没有挂起的请求、没有超时、没有人类不在场时 agent 卡死。代价是 agent 拿不到人类的回复——那属于对话通道的职责，不该塞进汇报通道。
 
-**为什么 JSONL 而不是 SQLite。** append-only、崩溃安全、`tail -f` 就能看、别的程序一行代码就能读。`seq` 在每次 append 前用「文件大小是否等于我上次写完的大小」检测外部写入，不一致就重读行数重同步，所以多个进程共用 `REPORT_MCP_RUN_ID` 时 seq 仍然单调。
+**为什么 JSONL 而不是 SQLite。** append-only、崩溃安全、`tail -f` 就能看、别的程序一行代码就能读。`seq` 在每次 append 前用「文件大小是否等于我上次写完的大小」检测外部写入，不一致就重读行数重同步，所以多个进程共用 `REPORT_MCP_RUN_ID` 时 seq 仍然单调。这条路径由 `test/e2e.mjs` 覆盖：两个真实 server 进程交错写同一个 run，断言 seq 无重号无断档。
 
 **stdout 纪律。** stdio transport 下 stdout 只能有 JSON-RPC，所以所有日志走 stderr。测试里有一条断言专门检查这一点。
 
@@ -262,13 +262,16 @@ demo bundle 只带原始 `records`，`RunSummary` 依然由页面里同一个 `d
 
 **侧栏排序用最后活动时间而非 mtime。** 文件被复制/恢复后 mtime 会变，语义上「最新」应该指「最后一条记录的时间」。
 
+**详情立刻刷新，侧栏晚 600ms。** SSE 的 `runs` 事件同时触发 `loadRun()`（详情，直接读）和 `reloadRuns()`（侧栏，`setTimeout` 600ms 防抖）。防抖是必要的：agent 连报五条进度就会打五次 `/api/runs` 全量重读，而 `/api/runs` 要读所有 run 文件再重新汇总。代价是**两栏在时间上不同步**——头部已经 `blocked`、侧栏还显示 `running` 是正常现象，不是 bug。测试里凡是断言侧栏的，都必须等侧栏自己的条件，不能拿头部的变化当下文立刻读。
+
 ---
 
 ## 10. 局限与后续方向
 
 已知局限：
 
-- **并发 append 无锁**。两个进程同时写同一个 run，`seq` 可能撞。实际场景里一次 MCP 连接对应一个 run，影响面很小；`REPORT_MCP_RUN_ID` 共享时建议低频写入。
+- **并发 append 无锁**。`seq` 重同步靠「append 前比对文件大小」，这是 check-then-act 而非原子操作：两个进程**真正同时**落到同一个窗口仍可能撞号。`test/e2e.mjs` 覆盖的是**交错**写入——agent 逐条 await tool 调用，即实际使用节奏——证明这种情况无重号无断档；真并发不在保证范围内。一次 MCP 连接对应一个 run，`REPORT_MCP_RUN_ID` 共享时建议低频写入。
+- **面板只在 jsdom 里验证过**。没有起真实 Chromium：布局/CSS、浏览器原生 `EventSource` 的重连行为、多标签一致性都没测。数据流和 DOM 结构是测住的，视觉与浏览器差异不是。
 - **单机 localhost**。没有鉴权，也没有 TLS；绑定 `127.0.0.1` 意味着只服务本机。
 - **没有人类 → agent 的回话通道**（by design，见 §9）。
 - **没有外部通知**。人不在面板前时不会被打扰。
@@ -314,10 +317,11 @@ npm start           # 起一个空 run（用于手动连）
 npm test            # 构建 + 造数据 + 起面板 + 三个套件
 ```
 
-`npm test` 覆盖 94 条断言，分四套：
+`npm test` 覆盖 160 条断言，分五套：
 
 | 套件 | 验证什么 |
 |---|---|
+| `test/e2e.mjs` | **agent → 人类全链路**：真实 stdio tool 调用 → 进程边界 → 真实面板 DOM，测试全程不碰 JSONL。含两进程共享 `REPORT_MCP_RUN_ID` 交错写（seq 无重号无断档 + 侧栏实时可见）、双写者被 SIGKILL 后重启恢复（历史完好、seq 从 8 续上） |
 | `test/smoke.mjs` | MCP 握手、7 个 tool 逐一调用、seq 连续、HTTP API、404、SSE 推送、**stdout 只有 JSON-RPC** |
 | `test/render.mjs` | jsdom 里真实渲染：侧栏、头部、时间线 13 条记录、成果卡片、筛选、切换 run、XSS 转义、离线降级 |
 | `test/live.mjs` | 带 EventSource shim：**在窗口外直接往 JSONL 追加记录，断言 DOM 在 700ms 内更新**，含状态翻转与筛选 |
@@ -342,9 +346,10 @@ scripts/
 .github/workflows/
   pages.yml        测试门禁 → 生成 bundle → 部署 Pages
 test/
-  run.mjs          测试编排（起面板、依次跑四套件、清理）
+  run.mjs          测试编排（起面板、依次跑五套件、清理）
+  harness.mjs      共享测试件：MCP stdio 客户端、EventSource shim、waitFor
   fixtures.mjs     三组 fixture，测试与 demo 共用同一来源
   seed.mjs         把 fixtures 写成 JSONL
-  smoke.mjs / render.mjs / live.mjs / static.mjs
+  e2e.mjs / smoke.mjs / render.mjs / live.mjs / static.mjs
   verify-pages.mjs   部署后线上核验（手动，不进 npm test）
 ```

@@ -1,4 +1,7 @@
 import fs from "node:fs";
+
+import { createEventSourceShim, createFetcher } from "./harness.mjs";
+
 const { JSDOM, VirtualConsole } = await import("jsdom");
 const vc = new VirtualConsole();
 if (typeof vc.forwardTo === "function") vc.forwardTo(console);
@@ -17,6 +20,7 @@ const check = (name, cond, extra) => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const html = await (await fetch(ORIGIN + "/")).text();
+const nodeFetch = createFetcher(ORIGIN);
 
 const dom = new JSDOM(html, {
   url: `${ORIGIN}/#/run/${RUN}`,
@@ -24,59 +28,15 @@ const dom = new JSDOM(html, {
   pretendToBeVisual: true,
   virtualConsole: vc,
   beforeParse(window) {
-    const nodeFetch = (u, o) => fetch(new URL(String(u), ORIGIN), o);
-    window.fetch = (u, o) => {
-      const r = nodeFetch(u, o);
-      return r;
-    };
-
-    // Minimal EventSource over fetch streaming — jsdom ships none.
-    class EventSourceShim {
-      constructor(url) {
-        this.listeners = new Map();
-        this.onerror = null;
-        this.readyState = 0;
-        this.ac = new AbortController();
-        nodeFetch(url, { signal: this.ac.signal })
-          .then((res) => {
-            this.readyState = 1;
-            const reader = res.body.getReader();
-            const dec = new TextDecoder();
-            let acc = "";
-            const pump = () =>
-              reader.read().then(({ value, done }) => {
-                if (done) return;
-                acc += dec.decode(value, { stream: true });
-                let i;
-                while ((i = acc.indexOf("\n\n")) >= 0) {
-                  const block = acc.slice(0, i);
-                  acc = acc.slice(i + 2);
-                  const em = /^event: (.+)$/m.exec(block);
-                  const dm = /^data: (.+)$/m.exec(block);
-                  if (!em || !dm) continue;
-                  console.log(`  [sse] ${em[1]} ${dm[1].slice(0, 90)}`);
-                  for (const fn of this.listeners.get(em[1]) ?? []) {
-                    try { fn({ data: dm[1] }); }
-                    catch (e) { console.log("  [sse] LISTENER THREW:", e && e.stack ? e.stack : e); }
-                  }
-                }
-                return pump();
-              });
-            return pump();
-          })
-          .catch((e) => { console.log("  [sse] STREAM ERROR:", e && e.message ? e.message : e); if (this.onerror) this.onerror(e); });
-      }
-      addEventListener(t, fn) {
-        if (!this.listeners.has(t)) this.listeners.set(t, []);
-        this.listeners.get(t).push(fn);
-      }
-      removeEventListener(t, fn) {
-        const a = this.listeners.get(t);
-        if (a) this.listeners.set(t, a.filter((f) => f !== fn));
-      }
-      close() { console.log("  [sse] CLOSED by client"); this.ac.abort(); this.readyState = 2; }
-    }
-    window.EventSource = EventSourceShim;
+    window.fetch = nodeFetch;
+    // jsdom ships no EventSource; bridge SSE over fetch. The transcript hooks
+    // keep the suite's original output so a failure shows what actually arrived.
+    window.EventSource = createEventSourceShim(nodeFetch, {
+      onEvent: (type, data) => console.log(`  [sse] ${type} ${data.slice(0, 90)}`),
+      onListenerError: (e) => console.log("  [sse] LISTENER THREW:", e && e.stack ? e.stack : e),
+      onError: (e) => console.log("  [sse] STREAM ERROR:", e && e.message ? e.message : e),
+      onClose: () => console.log("  [sse] CLOSED by client"),
+    });
     window.addEventListener("error", (e) => console.log("PAGE ERROR:", e.error?.stack || e.message));
   },
 });

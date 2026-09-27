@@ -1,65 +1,14 @@
-import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
+import { connectMcp } from "./harness.mjs";
 
 const HOME = process.env.SMOKE_HOME || "/tmp/opencode/report-home-smoke";
 fs.rmSync(HOME, { recursive: true, force: true }); // self-contained: no leftovers from prior runs
-const proc = spawn("node", [SERVER], {
-  env: { ...process.env, REPORT_MCP_HOME: HOME, REPORT_MCP_PORT: "0" },
-  stdio: ["pipe", "pipe", "pipe"],
-});
 
-let panelUrl = null;
-let stderrBuf = "";
-proc.stderr.on("data", (d) => {
-  stderrBuf += d.toString();
-  const m = /\[report-mcp\] panel\s+(http:\/\/[^\s#]+)/.exec(stderrBuf);
-  if (m) panelUrl = m[1].replace(/\/+$/, "");
-});
-
-let buf = "";
-const pending = new Map();
-const notifications = [];
-proc.stdout.on("data", (d) => {
-  buf += d.toString();
-  let i;
-  while ((i = buf.indexOf("\n")) >= 0) {
-    const line = buf.slice(0, i).trim();
-    buf = buf.slice(i + 1);
-    if (!line) continue;
-    let msg;
-    try { msg = JSON.parse(line); } catch { console.log("NON-JSON stdout:", line); continue; }
-    if (msg.id !== undefined && pending.has(msg.id)) {
-      const { resolve, reject } = pending.get(msg.id);
-      pending.delete(msg.id);
-      msg.error ? reject(new Error(JSON.stringify(msg.error))) : resolve(msg.result);
-    } else if (msg.method) {
-      notifications.push(msg.method);
-    }
-  }
-});
-
-let nextId = 1;
-function rpc(method, params) {
-  const id = nextId++;
-  const p = new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    setTimeout(() => { if (pending.has(id)) { pending.delete(id); reject(new Error("timeout: " + method)); } }, 10000);
-  });
-  proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
-  return p;
-}
-function notify(method, params) {
-  proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n");
-}
-function text(res) {
-  if (res.isError) throw new Error("tool error: " + res.content.map((c) => c.text).join(""));
-  return JSON.parse(res.content[0].text);
-}
+const client = await connectMcp({ ...process.env, REPORT_MCP_HOME: HOME, REPORT_MCP_PORT: "0" });
+const { rpc, notify, text, notifications } = client;
+let panelUrl = client.panelUrl;
 
 const results = [];
 function check(name, cond, extra) {
@@ -188,7 +137,7 @@ try {
 } catch (err) {
   check("no exception", false, String(err && err.stack ? err.stack : err));
 } finally {
-  proc.kill("SIGKILL");
+  client.close();
 }
 
 const failed = results.filter((r) => !r.ok);
