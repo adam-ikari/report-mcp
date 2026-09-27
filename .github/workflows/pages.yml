@@ -1,4 +1,4 @@
-name: Deploy panel demo to GitHub Pages
+name: Deploy report-mcp site to GitHub Pages
 
 on:
   push:
@@ -31,13 +31,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # Zero-dependency generation: no npm install needed for the static site.
-      - name: Generate demo bundle
-        run: node scripts/build-demo.mjs
+
+      # Regenerates public/demo-data.js and copies public/ into
+      # docs/public/panel/ so the demo ships at <site>/panel/. Zero-dependency:
+      # both scripts import only node builtins and local files, so the root
+      # install already done by `test` is not required here.
+      - name: Stage panel demo into the docs site
+        run: npm run docs:stage
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Build docs site
+        working-directory: docs
+        run: npm ci && npm run build
+
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
-          path: public
+          # VitePress output: docs site at the root, panel demo at /panel/.
+          path: docs/.vitepress/dist
 
   deploy:
     needs: build

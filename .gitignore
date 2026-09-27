@@ -4,5 +4,11 @@ public/demo-data.js
 test/.tmp-home/
 test/.tmp-smoke/
 test/.tmp-e2e/
+
+# VitePress docs site — node_modules, build output, staged panel demo
+docs/node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
+docs/public/panel/
 *.log
 .DS_Store

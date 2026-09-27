@@ -6,6 +6,9 @@
 agent ──report_* tools──▶ MCP(stdio) ──▶ JSONL 落盘 ──▶ 本地面板(SSE) ──▶ 人类
 ```
 
+- 📖 **文档站**：<https://adam-ikari.github.io/report-mcp/>（VitePress，含安装与使用方法）
+- 🖥 **面板 Demo**：<https://adam-ikari.github.io/report-mcp/panel/>（示例数据）
+
 ---
 
 ## 1. 要解决的问题
@@ -289,22 +292,42 @@ demo bundle 只带原始 `records`，`RunSummary` 依然由页面里同一个 `d
 
 ## 11. 网站发布（GitHub Pages）
 
-静态 demo 站已上线：**<https://adam-ikari.github.io/report-mcp/>**
+站点已上线：**<https://adam-ikari.github.io/report-mcp/>**
 
-它展示的是 fixture 样例数据，不是你的实时汇报——真正的实时面板仍走 §8 的本机接入。两者共用同一个 `public/index.html`，靠 §5 的双模式区分。
+| 路径 | 内容 |
+|---|---|
+| `/report-mcp/` | **VitePress 文档站**（`docs/`）——安装、使用方法、tool 参考、设计决策 |
+| `/report-mcp/panel/` | **面板静态 demo**——fixture 样例数据，挂紫色 `DEMO` 角标 |
+
+两者共用同一个 `public/index.html`，靠 §5 的双模式区分。文档站在根路径、demo 挪到 `/panel/`，是因为文档站才是项目的门面，而 demo 是它的一个子页面。真正要接实时面板仍走 §8 的本机接入——**线上那个永远是示例数据**。
+
+`docs/` 是独立的 `package.json`：文档工具链（VitePress + Vue）不该混进被发布的 npm 包里。
+
+```bash
+npm --prefix docs install    # 只有改文档站时需要
+npm run docs:dev             # 暂存 demo + 起本地开发服务器
+npm run docs:build           # 暂存 + 构建到 docs/.vitepress/dist
+npm run docs:preview         # 本地预览构建产物
+```
+
+::: warning 构建前必须先 stage
+`docs:dev` / `docs:build` 会自动跑 `npm run docs:stage`，把 `public/` 复制进 `docs/public/panel/`。直接调 `vitepress build` 会得到一个**没有 `/panel/` 的站点**。
+:::
 
 发布链路 `.github/workflows/pages.yml`：
 
 ```
-push → test(4 套件 94 断言) → build(生成 demo bundle + 上传 public/) → deploy
+push → test(5 套件 160 断言) → build(docs:stage + vitepress build) → deploy
 ```
 
-- **测试是发布门禁**：测试红了就不部署。
-- **产物只有 `public/`**，13 个文件、几十 kB，没有 `dist/`、没有依赖、没有源码里的密钥面。
-- demo bundle 在 CI 里现生成，所以 `npm test` 反复跑不会把 git 弄脏（`public/demo-data.js` 在 `.gitignore` 里）。
-- 仓库必须是 public 才能用免费 Pages；面板本身**不含**任何真实运行数据。
+- **测试是发布门禁**：测试红了就不部署；docs 链接断了 `build` 失败，同样拦住。
+- **staging 零依赖**：`build-demo.mjs` 和 `stage-panel.mjs` 只 import node 内置模块和本地文件，build job 不需要 root `npm ci`。
+- demo bundle 在 CI 里现生成，所以 `npm test` 反复跑不会把 git 弄脏（`public/demo-data.js`、`docs/public/panel/` 都在 `.gitignore` 里）。
+- 仓库必须是 public 才能用免费 Pages；demo **不含**任何真实运行数据。
 
-手动重发：仓库 → Actions → `Deploy panel demo to GitHub Pages` → `Run workflow`。
+手动重发：仓库 → Actions → `Deploy report-mcp site to GitHub Pages` → `Run workflow`。
+
+线上核验 `node test/verify-pages.mjs` 同时盯两半：文档站 7 项（VitePress 标记、hero、导航、安装/使用页、跨页锚点），面板 demo 25 项。
 
 ---
 
@@ -312,9 +335,14 @@ push → test(4 套件 94 断言) → build(生成 demo bundle + 上传 public/)
 
 ```bash
 npm install
-npm run build       # tsc → dist/
+npm run build       # tsc → dist/ + 生成 demo bundle
 npm start           # 起一个空 run（用于手动连）
-npm test            # 构建 + 造数据 + 起面板 + 三个套件
+npm test            # 构建 + 造数据 + 起面板 + 五个套件
+npm run typecheck   # 只跑 tsc --noEmit
+
+# 文档站（独立依赖，见 §11）
+npm --prefix docs install
+npm run docs:dev    # 本地开发服务器
 ```
 
 `npm test` 覆盖 160 条断言，分五套：
@@ -343,8 +371,14 @@ public/
   demo-data.js     生成物，不入库（scripts/build-demo.mjs 产出）
 scripts/
   build-demo.mjs   从 fixtures 生成 demo bundle，零依赖
+  stage-panel.mjs  把 public/ 暂存进 docs/public/panel/（站点部署用）
+docs/               VitePress 文档站（独立 package.json）
+  index.md          首页
+  guide/            安装与接入、使用方法、面板与 Demo
+  reference/        tool 一览、架构与数据模型、设计决策与局限
+  contributing.md   开发、测试与发布
 .github/workflows/
-  pages.yml        测试门禁 → 生成 bundle → 部署 Pages
+  pages.yml        测试门禁 → stage + vitepress build → 部署 Pages
 test/
   run.mjs          测试编排（起面板、依次跑五套件、清理）
   harness.mjs      共享测试件：MCP stdio 客户端、EventSource shim、waitFor

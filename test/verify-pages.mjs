@@ -6,14 +6,19 @@
  * after a deploy:
  *
  *   node test/verify-pages.mjs
- *   PAGES_URL=https://adam-ikari.github.io/report-mcp/ node test/verify-pages.mjs
+ *   PAGES_URL=https://adam-ikari.github.io/report-mcp/panel/ node test/verify-pages.mjs
+ *
+ * The site has two halves: the VitePress docs at the site root (DOCS_URL) and
+ * the panel demo at /panel/ (PAGES_URL, where the demo moved when the docs
+ * took over the root path).
  *
  * Assertions are written so that a broken page reports FAILs rather than
  * throwing — a verification script that crashes tells you nothing useful.
  */
 import { JSDOM, VirtualConsole } from "jsdom";
 
-const BASE = process.env.PAGES_URL || "https://adam-ikari.github.io/report-mcp/";
+const PAGES = process.env.PAGES_URL || "https://adam-ikari.github.io/report-mcp/panel/";
+const DOCS = process.env.DOCS_URL || "https://adam-ikari.github.io/report-mcp/";
 
 const results = [];
 const check = (name, cond, extra) => {
@@ -80,8 +85,8 @@ const runTitles = (doc) =>
   [...doc.querySelectorAll(".run-item")].map((i) => i.querySelector(".t")?.textContent ?? "?");
 
 /* ---- 1. normal entry: trailing slash ---- */
-console.log("--- entry with trailing slash ---");
-const dom = await boot(BASE);
+console.log("--- panel demo: entry with trailing slash ---");
+const dom = await boot(PAGES);
 const doc = dom.window.document;
 await sleep(3500); // detect() + script load + render
 
@@ -116,14 +121,14 @@ check("filter works with no backend", entries(doc) === 1, "entries=" + entries(d
 dom.window.close();
 
 /* ---- 2. deep link straight into a run, no trailing slash ---- */
-console.log("\n--- deep link, no trailing slash ---");
+console.log("\n--- panel demo: deep link, no trailing slash ---");
 // Tolerant by design: the Pages edge sometimes 301s to the slashed form and
 // sometimes serves the page directly. A browser is fine with either (it follows
 // the redirect and keeps the fragment); what must never happen is a hard error.
-const bare = await fetch(BASE.replace(/\/$/, ""), { headers: { "accept-encoding": "identity" } });
+const bare = await fetch(PAGES.replace(/\/$/, ""), { headers: { "accept-encoding": "identity" } });
 check("no-slash URL resolves (2xx/3xx, never 4xx/5xx)", bare.status >= 200 && bare.status < 400,
   "status=" + bare.status);
-const deep = BASE.replace(/\/$/, "") + "#/run/run_20260923220100_ee33ff";
+const deep = PAGES.replace(/\/$/, "") + "#/run/run_20260923220100_ee33ff";
 const dom2 = await boot(deep);
 const doc2 = dom2.window.document;
 await sleep(3500);
@@ -134,6 +139,39 @@ check("failure reason surfaced", (txt(doc2, "rMeta") ?? "").includes("API 凭据
   (txt(doc2, "rMeta") ?? "(no meta)").slice(-140));
 check("static mode on deep link", (txt(doc2, "homePath") ?? "").includes("演示"), txt(doc2, "homePath"));
 dom2.window.close();
+
+/* ---- 3. docs site at the site root ---- */
+// canonicalize() appends a trailing slash, which would corrupt a `.html` path,
+// so only the directory-shaped home URL gets it.
+const get = async (url) => {
+  const res = await fetch(url, { headers: { "accept-encoding": "identity" } });
+  return { res, html: res.ok ? await res.text() : "" };
+};
+
+console.log("\n--- docs site (site root) ---");
+const home = await get(canonicalize(DOCS));
+check(`GET ${DOCS} → 200`, home.res.status === 200, `status=${home.res.status}`);
+check("home is the docs site", home.html.includes("<title>report-mcp</title>"),
+  (home.html.match(/<title>[^<]*<\/title>/) || ["(no title)"])[0]);
+check("built by VitePress", /<meta name="generator" content="VitePress/.test(home.html));
+check("hero rendered", home.html.includes("VPHero"));
+check("nav offers the panel demo at /panel/", home.html.includes("/report-mcp/panel/"));
+
+const install = await get(DOCS + "guide/install.html");
+check("安装与接入 → 200", install.res.status === 200, `status=${install.res.status}`);
+check("installation page rendered", install.html.includes("<title>安装与接入"));
+check("installation shows the npm command", install.html.includes("npm install -g report-mcp"));
+
+const usage = await get(DOCS + "guide/usage.html");
+check("使用方法 → 200", usage.res.status === 200, `status=${usage.res.status}`);
+check("usage page rendered", usage.html.includes("<title>使用方法"));
+check("usage documents report_start", usage.html.includes("report_start"));
+
+// Regression guard: VitePress slugifies `report_panel` → `report-panel`, so a
+// hand-written `#report_panel` anchor silently fails to jump.
+check("cross-page anchor resolves",
+  install.html.includes("#report-panel") && usage.html.includes('id="report-panel"'),
+  install.html.includes("#report_panel") ? "still underscore" : "slug ok");
 
 const failed = results.filter((x) => !x).length;
 console.log(`\n${results.length - failed}/${results.length} passed`);
