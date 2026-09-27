@@ -163,7 +163,11 @@ check("installation page rendered", install.html.includes("<title>安装与接�
 // Shiki splits code fences into per-token spans (`<span>npm</span><span> install…`),
 // so a raw substring search over the HTML misses commands that are definitely there.
 const plain = (html) => html.replace(/<[^>]+>/g, "");
-check("installation shows the npm command", plain(install.html).includes("npm install -g report-mcp"));
+// The load-bearing line: this is the exact command users are told to run, and
+// it only works with --install-links=true (see install.md). A regression here
+// ships a documented install that produces a dangling symlink.
+check("installation shows the git install command",
+  plain(install.html).includes("npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp.git"));
 
 const usage = await get(DOCS + "guide/usage.html");
 check("使用方法 → 200", usage.res.status === 200, `status=${usage.res.status}`);
