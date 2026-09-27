@@ -160,12 +160,15 @@ check("nav offers the panel demo at /panel/", home.html.includes("/report-mcp/pa
 const install = await get(DOCS + "guide/install.html");
 check("安装与接入 → 200", install.res.status === 200, `status=${install.res.status}`);
 check("installation page rendered", install.html.includes("<title>安装与接入"));
-check("installation shows the npm command", install.html.includes("npm install -g report-mcp"));
+// Shiki splits code fences into per-token spans (`<span>npm</span><span> install…`),
+// so a raw substring search over the HTML misses commands that are definitely there.
+const plain = (html) => html.replace(/<[^>]+>/g, "");
+check("installation shows the npm command", plain(install.html).includes("npm install -g report-mcp"));
 
 const usage = await get(DOCS + "guide/usage.html");
 check("使用方法 → 200", usage.res.status === 200, `status=${usage.res.status}`);
 check("usage page rendered", usage.html.includes("<title>使用方法"));
-check("usage documents report_start", usage.html.includes("report_start"));
+check("usage documents report_start", plain(usage.html).includes("report_start"));
 
 // Regression guard: VitePress slugifies `report_panel` → `report-panel`, so a
 // hand-written `#report_panel` anchor silently fails to jump.
