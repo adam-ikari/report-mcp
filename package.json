@@ -23,7 +23,7 @@
     "docs:dev": "npm run docs:stage && npm --prefix docs run dev",
     "docs:build": "npm run docs:stage && npm --prefix docs run build",
     "docs:preview": "npm --prefix docs run preview",
-    "prepublishOnly": "npm run build"
+    "prepare": "npm run build"
   },
   "engines": {
     "node": ">=18"
