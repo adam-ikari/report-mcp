@@ -13,26 +13,32 @@ agent ──report_* tools──▶ MCP(stdio) ──▶ JSONL 落盘 ──▶ 
 
 ## 安装
 
-### 方式一：npm
-
 ```bash
-npm install -g report-mcp
+npm install -g git+https://github.com/adam-ikari/report-mcp.git
 report-mcp --version    # report-mcp 0.1.0
 ```
 
-### 方式二：从源码构建
+约 20 秒，装完只保留生产依赖。
+
+::: tip 分发渠道是 Git
+仓库**不提交** `public/demo-data.js`——fixture 的时间戳是相对 `Date.now()` 的，只有在安装/部署那一刻生成，Demo 里的相对时间（「3 分钟前」）才准。这由 `prepare` 钩子完成，它是**零依赖**的。
+
+`dist/` 反过来**是入库的**：全局安装拿不到 devDependencies，没有 `tsc` 可跑。CI 会比对 `dist/` 与 `src/` 的构建结果，不一致就红——避免装到昨天的代码。
+
+:::
+
+::: warning npm registry 尚未发布
+`npm install -g report-mcp` 目前会 404。**请用上面的 git URL。**
+:::
+
+### 另一种方式：克隆源码（开发用）
 
 ```bash
 git clone https://github.com/adam-ikari/report-mcp.git
 cd report-mcp
-npm install
-npm run build           # tsc → dist/，并生成 demo bundle
-```
-
-产物 `dist/index.js` 就是可执行入口。装完可跑一次测试确认：
-
-```bash
-npm test                # 5 套，160 条断言
+npm install             # 跑 prepare → 生成 demo bundle
+npm run build           # 改了 src/ 才需要：tsc → dist/
+npm test                # 可选：5 套，160 条断言
 ```
 
 ## 接入 MCP 客户端

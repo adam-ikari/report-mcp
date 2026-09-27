@@ -230,14 +230,45 @@ demo bundle 只带原始 `records`，`RunSummary` 依然由页面里同一个 `d
 
 ## 8. 接入
 
+### 安装
+
+```bash
+npm install -g git+https://github.com/adam-ikari/report-mcp.git
+report-mcp --version    # report-mcp 0.1.0
+```
+
+约 20 秒装完，只保留生产依赖。**分发渠道是 Git**：
+
+- `dist/` **入库** —— 全局安装拿不到 devDependencies，没有 `tsc` 可跑。CI 会比对 `dist/` 与 `src/` 的构建结果，不一致就红，避免装到昨天的代码
+- `public/demo-data.js` **不入库** —— fixture 时间戳是相对 `Date.now()` 的，由 `prepare` 钩子（零依赖）在安装时现生成，Demo 里的相对时间才准
+
+> npm registry 尚未发布，`npm install -g report-mcp` 会 404。
+
+### MCP 客户端配置
+
+全局安装后直接用命令名：
+
 ```jsonc
 // opencode.json / claude_desktop_config.json
 {
   "mcpServers": {
     "report": {
+      "command": "report-mcp",
+      "env": { "REPORT_MCP_PORT": "7788" }   // 可选：固定端口方便收藏
+    }
+  }
+}
+```
+
+克隆源码构建的则用绝对路径（见 §12）：
+
+```jsonc
+{
+  "mcpServers": {
+    "report": {
       "command": "node",
       "args": ["/absolute/path/report_mcp/dist/index.js"],
-      "env": { "REPORT_MCP_PORT": "7788" }   // 可选：固定端口方便收藏
+      "env": { "REPORT_MCP_PORT": "7788" }
     }
   }
 }
