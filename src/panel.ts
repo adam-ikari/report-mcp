@@ -1,9 +1,11 @@
 import http from "node:http";
+import path from "node:path";
 import fsp from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import type { Store } from "./store.js";
 import { parseRecords, summarize } from "./store.js";
+import type { ReportRecord } from "./types.js";
 
 const HTML_PATH = fileURLToPath(new URL("../public/index.html", import.meta.url));
 
@@ -51,6 +53,103 @@ function json(res: http.ServerResponse, status: number, body: unknown): void {
     "Access-Control-Allow-Origin": "*",
   });
   res.end(text);
+}
+
+/** Extension → Content-Type for inline artifact rendering. SVG is deliberately absent. */
+const FILE_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+};
+const TEXT_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".html", ".htm"]);
+
+const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/**
+ * Serve one file artifact of a stored result record. The path never comes
+ * from the query string — it is read back out of `artifacts[i]` of the record
+ * the caller names by (run, seq), so this can only ever disclose files the
+ * agent already reported. HTML is served as text/plain: rendering it as a
+ * document is the panel's job, inside a sandboxed iframe.
+ */
+async function serveArtifactFile(store: Store, url: URL, res: http.ServerResponse): Promise<void> {
+  const runId = url.searchParams.get("run") ?? "";
+  const seqRaw = url.searchParams.get("seq") ?? "";
+  const idxRaw = url.searchParams.get("i") ?? "";
+  if (!RUN_ID_RE.test(runId)) {
+    json(res, 400, { error: "invalid run id" });
+    return;
+  }
+  const seq = Number(seqRaw);
+  const idx = Number(idxRaw);
+  if (!Number.isInteger(seq) || !Number.isInteger(idx) || seq < 1 || idx < 0) {
+    json(res, 400, { error: "seq and i must be integers" });
+    return;
+  }
+
+  const records: ReportRecord[] = await store.readRecords(runId);
+  const rec = records.find((r) => r.seq === seq);
+  if (!rec || rec.kind !== "result") {
+    json(res, 404, { error: "result record not found", runId, seq });
+    return;
+  }
+  const artifact = rec.artifacts?.[idx];
+  if (!artifact?.path) {
+    json(res, 404, { error: "artifact not found", runId, seq, i: idx });
+    return;
+  }
+
+  const ext = path.extname(artifact.path).toLowerCase();
+  const contentType = FILE_TYPES[ext];
+  const isText = TEXT_EXTENSIONS.has(ext);
+  if (!contentType && !isText) {
+    json(res, 403, { error: "file type not allowed", ext });
+    return;
+  }
+
+  const maxBytes = Number(process.env.REPORT_MCP_MAX_FILE_BYTES ?? 0) || 20 * 1024 * 1024;
+  const roots = (process.env.REPORT_MCP_FILE_ROOTS ?? "")
+    .split(":")
+    .map((r) => r.trim())
+    .filter(Boolean);
+
+  let real: string;
+  try {
+    real = await fsp.realpath(path.resolve(artifact.path));
+  } catch {
+    json(res, 404, { error: "file not found", runId, seq, i: idx });
+    return;
+  }
+  if (roots.length) {
+    const allowed = roots.some((rootRaw) => {
+      const root = path.resolve(rootRaw);
+      return real === root || real.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+    });
+    if (!allowed) {
+      json(res, 403, { error: "file outside allowed roots" });
+      return;
+    }
+  }
+  const stat = await fsp.stat(real).catch(() => null);
+  if (!stat?.isFile()) {
+    json(res, 404, { error: "file not found", runId, seq, i: idx });
+    return;
+  }
+  if (stat.size > maxBytes) {
+    json(res, 413, { error: "file too large", size: stat.size, maxBytes });
+    return;
+  }
+
+  const buf = await fsp.readFile(real);
+  res.writeHead(200, {
+    "Content-Type": contentType || "text/plain; charset=utf-8",
+    "Content-Length": buf.length,
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
+  });
+  res.end(buf);
 }
 
 /** Push newly appended records for `runId` to every watcher of it. */
@@ -136,6 +235,11 @@ export async function startPanel(store: Store): Promise<Panel> {
         return;
       }
       json(res, 200, data);
+      return;
+    }
+
+    if (p === "/api/file" && req.method === "GET") {
+      await serveArtifactFile(store, url, res);
       return;
     }
 

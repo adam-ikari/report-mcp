@@ -9,14 +9,32 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildRuns } from "../test/fixtures.mjs";
+import { buildRuns, FIXTURES_DIR } from "../test/fixtures.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const out = path.join(here, "..", "public", "demo-data.js");
+const pub = path.join(here, "..", "public");
+const out = path.join(pub, "demo-data.js");
+
+// Point file artifacts at site-relative copies so the hosted (Pages) panel can
+// display the demo images and hydrate the demo md/html without any backend.
+const assetsDir = path.join(pub, "assets");
+fs.mkdirSync(assetsDir, { recursive: true });
+const runs = buildRuns();
+for (const run of runs) {
+  for (const rec of run.records) {
+    for (const a of rec.artifacts || []) {
+      if (typeof a.path === "string" && a.path.startsWith(FIXTURES_DIR + path.sep)) {
+        const base = path.basename(a.path);
+        fs.copyFileSync(a.path, path.join(assetsDir, base));
+        a.path = "assets/" + base;
+      }
+    }
+  }
+}
 
 const payload = {
   generatedAt: new Date().toISOString(),
-  runs: buildRuns(),
+  runs,
 };
 
 const js =

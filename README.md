@@ -85,7 +85,7 @@ agent 干活的时候，人类那边是黑盒：要么刷终端日志，要么�
 | `progress` | 阶段进度 | `phase`, `percent`(0–100，缺省=不确定), `step`/`totalSteps`, `message` |
 | `status` | run 级状态切换 | `status`(running/waiting/blocked/error/done/failed/aborted), `message` |
 | `log` | 中间事件 | `level`(debug/info/warn/error), `message`, `detail` |
-| `result` | 结构化成果交付 | `title`, `summary`, `artifacts[]`, `metrics[]`, `links[]`, `data` |
+| `result` | 结构化成果交付 | `title`, `summary`, `markdown`, `html`, `artifacts[]`, `metrics[]`, `links[]`, `data` |
 | `end` | 收尾 | `status`(done/failed/aborted), `summary`, `durationMs` |
 
 **`detail` / `data` 是 `any`**：agent 想带什么带什么，面板用 `<details>` 折叠展示，不参与派生计算。
@@ -151,13 +151,17 @@ error 级会进 `lastError`，在 run 列表里挂红色 `err` 角标。
 { "title": "agent→human 汇报机制对比",
   "summary": "对比了 5 类通道，结论是……",
   "status": "done",
-  "artifacts": [ { "name": "survey.md", "path": "/abs/report.md",
+  "markdown": "## 结论\n\n- 混合方案**最优**（8.6/10）\n- 纯 stdio 方案零依赖但不可视",
+  "artifacts": [ { "name": "得分热力", "path": "/abs/out/chart.png", "type": "image" },
+                 { "name": "survey.md", "path": "/abs/report.md",
                    "type": "markdown", "description": "完整综述" } ],
   "metrics":  [ { "name": "综合得分", "value": 8.6, "unit": "/10", "hint": "混合方案" } ],
   "links":    [ { "label": "看板", "url": "https://…" } ],
   "data":     { "rows": 23, "dims": 9 } }
 ```
 **每个有意义的交付物调一次**（不是每条日志）。渲染成面板里高亮的成果卡片。它**不结束** run。
+
+成果卡支持网页形态的内容：`markdown` 字段排版渲染；`html` 字段（或 `type:"html"` 的文件）在 **sandbox iframe** 里运行——脚本能跑，但与面板完全隔离；`type` 为 `image`/`markdown`/`html` 的文件工件由 `GET /api/file` 受控提供（路径只从存储记录反查、扩展名白名单、无 svg、默认 20 MiB 上限）。
 
 ### `report_end`
 ```jsonc
@@ -177,7 +181,7 @@ error 级会进 `lastError`，在 run 列表里挂红色 `err` 角标。
 
 - **左栏**：run 列表，按**最后活动时间**排序（不是文件 mtime），状态 chip、相对时间、进度条、错误角标
 - **右栏头部**：标题、状态 chip、agent/开始时间/耗时/记录数/warn-error 数/结果数/tags/最后错误/失败原因，加一条进度条（不确定态用滑动动画）
-- **时间线**：按 kind 着色，`result` 渲染成果卡片，`detail`/`data` 进 `<details>` 折叠
+- **时间线**：按 kind 着色，`result` 渲染成果卡片（内联图片 / Markdown 排版 / sandbox iframe HTML），`detail`/`data` 进 `<details>` 折叠
 - **筛选**：全部 / 进度 / 日志 / 结果 / 状态
 - **实时**：SSE 推增量记录，客户端本地重算 summary 所以头部立即更新；另有 15s 全量兜底
 - **自愈**：SSE 断线 `EventSource` 自动重连；`fs.watch` 不可靠的文件系统靠 5s sweep 兜底
@@ -234,7 +238,7 @@ demo bundle 只带原始 `records`，`RunSummary` 依然由页面里同一个 `d
 
 ```bash
 npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp.git
-report-mcp --version    # report-mcp 0.1.1
+report-mcp --version    # report-mcp 0.2.0
 ```
 
 约 20 秒装完，只保留生产依赖。**分发渠道是 Git**：

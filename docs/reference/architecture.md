@@ -41,7 +41,7 @@
 | `progress` | 阶段进度 | `phase`, `percent`(0–100，缺省=不确定), `step`/`totalSteps`, `message` |
 | `status` | run 级状态切换 | `status`, `message` |
 | `log` | 中间事件 | `level`, `message`, `detail` |
-| `result` | 结构化成果交付 | `title`, `summary`, `artifacts[]`, `metrics[]`, `links[]`, `data` |
+| `result` | 结构化成果交付 | `title`, `summary`, `markdown`, `html`, `artifacts[]`, `metrics[]`, `links[]`, `data` |
 | `end` | 收尾 | `status`, `summary`, `durationMs` |
 
 **`detail` / `data` 是 `any`**：agent 想带什么带什么，面板用 `<details>` 折叠展示，不参与派生计算。
@@ -59,6 +59,14 @@
 - `durationMs` —— 有 `end` 用它，否则用到最后一条记录的跨度
 
 单向设计的好处在这里显出来：**没有状态同步问题**。面板随时可以从头重放，客户端和服务端的分歧最多是「少看到几条」，下一次读取自愈。
+
+## 富内容：文件面与渲染面
+
+结果卡支持网页形态的内容，安全边界切在 server 与浏览器两侧：
+
+- **`GET /api/file?run=&seq=&i=`（server 侧）**：路径不来自请求参数，只从存储的 result 记录 `artifacts[i].path` 反查——可寻址面 = agent 已主动写进记录的文件。校验链：run id 字符集 + 整数 seq/i（400）→ 记录存在且为 result 且索引存在（404）→ 扩展名白名单，无 svg（403）→ `realpath` + `isFile()`（404）→ ≤20 MiB（413，`REPORT_MCP_MAX_FILE_BYTES`）。图片按真实 Content-Type，其余全部 `text/plain; charset=utf-8`（html 也不例外），恒发 `nosniff` + `no-store`，且**不附 CORS 头**。可选 `REPORT_MCP_FILE_ROOTS` 圈定目录白名单。
+- **渲染（浏览器侧）**：markdown 走零依赖转义优先排版器（原始 HTML 变纯文本，链接只放行 `http(s)`/`mailto:`）；agent 的 HTML——无论来自 `html` 字段还是 `type:"html"` 文件——先注入保守 CSP，再进 `<iframe sandbox="allow-scripts" srcdoc>`。不给 `allow-same-origin`：iframe 是 opaque origin，脚本能运行，但读不到父页面 DOM，跨源 fetch 面板 API 又被无 CORS 头的响应挡住。两层各挡一半：server 挡「任意路径披露」，sandbox 挡「注入执行」。
+- **静态（Pages）模式**：没有 `/api/file` 可取，demo bundle 里的工件路径在构建时被重写为站点相对 `assets/…`，`scripts/build-demo.mjs` 把资产文件一并复制进 `public/assets/`（部署时随 `docs/public/panel/` 发布），所以线上 demo 的图片、markdown、sandbox HTML 都能真实渲染。
 
 ## 存储
 

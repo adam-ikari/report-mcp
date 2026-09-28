@@ -20,6 +20,11 @@ export default defineConfig({
   cleanUrls: false,
   lastUpdated: true,
 
+  // docs/public/panel/assets/*.md are demo artifact *data* files staged by
+  // scripts/stage-panel.mjs, not documentation — without this VitePress
+  // compiles them into pages (and SSR chokes on their content).
+  srcExclude: ["**/panel/**"],
+
   head: [
     ["meta", { name: "theme-color", content: "#4c9aff" }],
     ["meta", { property: "og:type", content: "website" }],
@@ -99,7 +104,7 @@ export default defineConfig({
 
     footer: {
       message: "agent → 人类的单向汇报通道 · MIT License",
-      copyright: "report-mcp v0.1.0",
+      copyright: "report-mcp v0.2.0",
     },
   },
 });

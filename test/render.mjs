@@ -64,12 +64,37 @@ check("result card rendered", !!$("timeline").querySelector(".result-card"));
 const card = $("timeline").querySelector(".result-card");
 check("metrics grid (4)", card.querySelectorAll(".metric").length === 4, "got " + card.querySelectorAll(".metric").length);
 check("metric value+unit", card.querySelector(".metric .v").textContent.includes("5"), card.querySelector(".metric .v").textContent);
-check("artifact links", card.querySelectorAll("ul.art li").length === 2, "got " + card.querySelectorAll("ul.art li").length);
+check("artifact rows", card.querySelectorAll("ul.art > li").length === 5, "got " + card.querySelectorAll("ul.art > li").length);
 check("external link", !!card.querySelector('.links a[href="https://example.com/notes"]'));
 check("structured data in <details>", card.querySelectorAll("details").length >= 1);
 check("end entry w/ duration", tl.includes("耗时 2m 42s"), /耗时[^<]*/.exec(tl)?.[0]);
-check("all text is escaped (no raw <script>)", !$("timeline").innerHTML.includes("<script"));
+check("no executable <script> in timeline", !$("timeline").querySelector("script"));
 check("no unescaped user angle brackets", !$("timeline").textContent.includes("[object"));
+check("我的面板 hidden in live mode", $("myPanels").classList.contains("hidden"));
+
+console.log("\n--- rich result rendering ---");
+// File artifacts hydrate asynchronously through /api/file; wait for all of them.
+check("artifacts hydrated", await waitFor(() =>
+  card.querySelector(".artimg") &&
+  !card.querySelector("[data-md-src]") &&
+  !card.querySelector("[data-html-src]") &&
+  card.querySelectorAll("ul.art li iframe.arthtml").length === 1));
+const img = card.querySelector(".artimg");
+check("image inline src uses /api/file", !!img && img.getAttribute("src").startsWith("/api/file?run=" +
+  encodeURIComponent("run_20260924051200_aa11bb") + "&seq=11&i=2"), img?.getAttribute("src"));
+const mdBodies = card.querySelectorAll(".md-body");
+check("inline markdown field rendered", mdBodies.length >= 2 && /权重最高/.test(mdBodies[0].textContent));
+check("markdown field escaped raw HTML", mdBodies[0].textContent.includes("<script>alert(1)</script>"));
+check("markdown field rendered <strong>", !!mdBodies[0].querySelector("strong"));
+check("notes.md file hydrated to typeset markdown", !!card.querySelector("ul.art li .md-body strong"));
+const frames = card.querySelectorAll("iframe.arthtml");
+check("inline html field in sandbox iframe", frames.length === 2 &&
+  frames[0].getAttribute("sandbox") === "allow-scripts" &&
+  !frames[0].getAttribute("sandbox").includes("allow-same-origin") &&
+  frames[0].getAttribute("srcdoc").includes("Web 面板 + JSONL = 8.6/10"), frames[0]?.getAttribute("sandbox"));
+const fileFrame = card.querySelector("ul.art li iframe.arthtml");
+check("html file artifact → sandbox iframe", !!fileFrame && fileFrame.getAttribute("sandbox") === "allow-scripts" &&
+  fileFrame.getAttribute("srcdoc").includes("Content-Security-Policy") && fileFrame.getAttribute("srcdoc").includes("script-ran"));
 
 console.log("\n--- filtering ---");
 const filterBtn = (label) => [...window.document.querySelectorAll("#filters button")].find((b) => b.textContent === label);

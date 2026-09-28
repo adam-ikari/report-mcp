@@ -2,6 +2,7 @@ node_modules/
 # dist/ is TRACKED on purpose: a global git install gets no devDependencies,
 # so `tsc` isn't there to build it. CI fails if it drifts from src/.
 public/demo-data.js
+public/assets/
 test/.tmp-home/
 test/.tmp-smoke/
 test/.tmp-e2e/

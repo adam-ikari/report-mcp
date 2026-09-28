@@ -143,17 +143,52 @@
   .metric .v { font-size: 16px; font-weight: 640; font-variant-numeric: tabular-nums; }
   .metric .u { font-size: 11px; color: var(--muted); margin-left: 3px; }
   ul.art { list-style: none; margin: 11px 0 0; padding: 0; display: grid; gap: 6px; }
-  ul.art li { display: flex; gap: 9px; align-items: baseline; font-size: 12.5px; }
+  ul.art li { display: flex; gap: 9px; align-items: baseline; font-size: 12.5px; flex-wrap: wrap; }
   ul.art .nm { color: #9cc7ff; }
   ul.art .pth { color: var(--muted); word-break: break-all; }
   .links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
   .links a { color: var(--accent); font-size: 12.5px; }
+
+  .artimg { max-width: 100%; border: 1px solid var(--line); border-radius: 8px; display: block; margin-top: 8px; }
+  .arthtml { width: 100%; min-height: 480px; border: 1px solid var(--line); border-radius: 8px; background: #fff; margin-top: 8px; }
+  .md-body { margin-top: 9px; color: #cfd8e3; font-size: 13.5px; }
+  .md-body h3, .md-body h4, .md-body h5, .md-body h6 { margin: 12px 0 6px; color: var(--text); }
+  .md-body h3 { font-size: 16px; } .md-body h4 { font-size: 15px; } .md-body h5 { font-size: 14px; }
+  .md-body p { margin: 7px 0; }
+  .md-body ul, .md-body ol { margin: 7px 0; padding-left: 22px; }
+  .md-body li { margin: 3px 0; }
+  .md-body blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid rgba(76,154,255,.5); color: var(--muted); background: rgba(76,154,255,.06); border-radius: 0 6px 6px 0; }
+  .md-body hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
+  .md-body a { color: var(--accent); }
+  .md-body img { max-width: 100%; border-radius: 8px; }
+  .md-body code { background: #0b0f14; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+  .md-body pre.mdcode { margin: 9px 0; padding: 10px 12px; background: #0b0f14; border: 1px solid var(--line); border-radius: 7px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; color: #b9c5d4; }
+  .md-body pre.mdcode code { background: none; border: 0; padding: 0; }
 
   .empty { margin: auto; text-align: center; color: var(--muted); padding: 40px; max-width: 620px; }
   .empty h3 { color: var(--text); margin: 0 0 10px; }
   .empty pre { text-align: left; display: inline-block; }
   .muted { color: var(--muted); }
   .hidden { display: none !important; }
+
+  #myPanels { border-bottom: 1px solid var(--line); padding: 8px 10px; }
+  #myPanels .lbl { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+  #myPanels .mp-add { display: flex; gap: 6px; }
+  #myPanels input {
+    flex: 1; min-width: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
+    color: var(--text); font: inherit; font-size: 11px; padding: 4px 8px;
+  }
+  #myPanels input:focus { outline: none; border-color: rgba(76,154,255,.5); }
+  .mp-item {
+    display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px;
+    color: #9cc7ff; text-decoration: none; word-break: break-all;
+  }
+  .mp-item:hover { text-decoration: underline; }
+  .mp-del {
+    background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 12px; padding: 0 4px; flex: none;
+  }
+  .mp-del:hover { color: var(--red); }
+  .mp-err { color: #ff8368; font-size: 11px; margin-top: 5px; }
 
   @media (max-width: 860px) {
     #app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
@@ -167,6 +202,14 @@
 <div id="app">
   <aside>
     <div class="brand"><span class="dot"></span><h1>Agent Report</h1><span class="chip demo hidden" id="modeChip" title="静态演示站点，数据为示例">DEMO</span><span class="spacer" style="flex:1"></span><span class="muted" id="runCount" style="font-size:11px"></span></div>
+    <div id="myPanels" class="hidden">
+      <div class="lbl">我的面板</div>
+      <div class="mp-add">
+        <input id="mpUrl" placeholder="http://127.0.0.1:7788" spellcheck="false" />
+        <button class="btn" id="mpAdd">添加</button>
+      </div>
+      <div id="mpList"></div>
+    </div>
     <div class="run-list" id="runList"></div>
   </aside>
 
@@ -246,6 +289,112 @@
   const details = (label, v) =>
     v == null || v === "" ? "" :
       `<details><summary>${esc(label)}</summary><pre>${esc(pretty(v))}</pre></details>`;
+
+  /* ---------------- rich result rendering (markdown / html / images) ---------------- */
+
+  /** Escape-first, zero-dependency markdown subset renderer. Returns trusted HTML. */
+  function renderMarkdown(src) {
+    const stash = [];
+    const hold = (html) => { stash.push(html); return "\u0000" + (stash.length - 1) + "\u0000"; };
+    let s = String(src == null ? "" : src).replace(/\r\n/g, "\n");
+    s = s.replace(/```[^\n]*\n?([\s\S]*?)(?:```|$)/g, (_m, body) =>
+      hold(`<pre class="mdcode"><code>${esc(String(body).replace(/\n+$/, ""))}</code></pre>`));
+    s = esc(s);
+    s = s.replace(/`([^`\n]+)`/g, (_m, c) => hold(`<code>${c}</code>`));
+    const safeUrl = (u) => {
+      const d = u.replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<");
+      return /^(https?:|mailto:)/i.test(d) ? d : null;
+    };
+    const inline = (t) => t
+      .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m0, alt, u) => {
+        const d = safeUrl(u);
+        return d ? `<img src="${d}" alt="${alt}">` : m0;
+      })
+      .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m0, txt, u) => {
+        const d = safeUrl(u);
+        return d ? `<a href="${d}" target="_blank" rel="noreferrer">${txt}</a>` : m0;
+      })
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+    const out = [];
+    let para = [], list = null, quote = null;
+    const fp = () => { if (para.length) { out.push(`<p>${inline(para.join(" "))}</p>`); para = []; } };
+    const fl = () => { if (list) { out.push((list.o ? "<ol>" : "<ul>") + list.items.map((x) => `<li>${inline(x)}</li>`).join("") + (list.o ? "</ol>" : "</ul>")); list = null; } };
+    const fq = () => { if (quote) { out.push(`<blockquote>${inline(quote.join(" "))}</blockquote>`); quote = null; } };
+    const flushAll = () => { fp(); fl(); fq(); };
+    for (const line of s.split("\n")) {
+      const t = line.trim();
+      let m;
+      if (/^\u0000\d+\u0000$/.test(t)) { flushAll(); out.push(t); continue; }
+      if (!t) { flushAll(); continue; }
+      if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) { flushAll(); out.push(`<h${Math.min(6, m[1].length + 2)}>${inline(m[2])}</h${Math.min(6, m[1].length + 2)}>`); continue; }
+      if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { flushAll(); out.push("<hr>"); continue; }
+      if ((m = /^\s*&gt;\s?(.*)$/.exec(line))) { fl(); fp(); (quote = quote || []).push(m[1]); continue; }
+      if ((m = /^\s*[-*+]\s+(.*)$/.exec(line))) {
+        fp(); fq();
+        if (list && list.o) fl();
+        (list = list || { o: false, items: [] }).items.push(m[1]);
+        continue;
+      }
+      if ((m = /^\s*\d+[.)]\s+(.*)$/.exec(line))) {
+        fp(); fq();
+        if (list && !list.o) fl();
+        (list = list || { o: true, items: [] }).items.push(m[1]);
+        continue;
+      }
+      fl(); fq(); para.push(t);
+    }
+    flushAll();
+    return out.join("\n").replace(/\u0000(\d+)\u0000/g, (_m, i) => stash[Number(i)] || "");
+  }
+
+  const FRAME_CSP = '<meta http-equiv="Content-Security-Policy" content="default-src *; script-src * \'unsafe-inline\'; img-src * data:;">';
+  function withCsp(html) {
+    const s = String(html);
+    if (/<meta\s+http-equiv=["']?content-security-policy/i.test(s)) return s;
+    if (/<head[^>]*>/i.test(s)) return s.replace(/<head[^>]*>/i, (m) => m + FRAME_CSP);
+    if (/<html[^>]*>/i.test(s)) return s.replace(/<html[^>]*>/i, (m) => m + "<head>" + FRAME_CSP + "</head>");
+    return FRAME_CSP + s;
+  }
+  /** Scripts run inside, but `sandbox="allow-scripts"` (no allow-same-origin) keeps the frame an opaque origin. */
+  const htmlIframe = (src) => `<iframe class="arthtml" sandbox="allow-scripts" srcdoc="${esc(withCsp(src))}"></iframe>`;
+
+  /** URL for an artifact rendered inline, or null when it must stay a plain link. */
+  function inlineAsset(r, a, i) {
+    if (a.url || !a.path) return null;
+    const t = String(a.type || "").toLowerCase();
+    let href = null;
+    if (DS.kind === "live") {
+      href = "/api/file?run=" + encodeURIComponent(state.runId) + "&seq=" + r.seq + "&i=" + i;
+    } else if (/^assets\/[\w./-]+$/.test(a.path)) {
+      href = a.path; // demo assets deployed next to the hosted panel
+    }
+    if (!href) return null;
+    if (t === "image") return { kind: "image", href };
+    if (t === "markdown" || t === "text") return { kind: "md", href };
+    if (t === "html") return { kind: "html", href };
+    return null;
+  }
+
+  /** Fill the data-md-src / data-html-src placeholders the last render left behind. */
+  function hydrate(box) {
+    for (const el of Array.from(box.querySelectorAll("[data-md-src],[data-html-src]"))) {
+      const isMd = el.hasAttribute("data-md-src");
+      const src = el.getAttribute(isMd ? "data-md-src" : "data-html-src");
+      el.removeAttribute(isMd ? "data-md-src" : "data-html-src");
+      fetch(src).then((res) => {
+        if (!el.isConnected) return;
+        if (!res.ok) { el.innerHTML = `<span class="muted">（加载失败：HTTP ${esc(res.status)}）</span>`; return; }
+        return res.text().then((text) => {
+          if (!el.isConnected) return;
+          if (isMd) el.innerHTML = renderMarkdown(text);
+          else el.outerHTML = htmlIframe(text);
+        });
+      }).catch(() => {
+        if (el.isConnected) el.innerHTML = '<span class="muted">（加载失败）</span>';
+      });
+    }
+  }
 
   // Mirror of the server-side summariser, so the header updates instantly on SSE.
   function derive(runId, records) {
@@ -517,19 +666,30 @@
       const metrics = (r.metrics || []).map((m) =>
         `<div class="metric"><div class="k">${esc(m.name)}${m.hint ? " · " + esc(m.hint) : ""}</div>
          <div class="v">${esc(m.value)}${m.unit ? `<span class="u">${esc(m.unit)}</span>` : ""}</div></div>`).join("");
-      const arts = (r.artifacts || []).map((a) => {
+      const mdBlock = r.markdown ? `<div class="md-body">${renderMarkdown(r.markdown)}</div>` : "";
+      const htmlBlock = r.html ? htmlIframe(r.html) : "";
+      const arts = (r.artifacts || []).map((a, i) => {
         const target = a.url || a.path || "";
         const nm = target ? (a.url
           ? `<a class="nm" href="${esc(a.url)}" target="_blank" rel="noreferrer">${esc(a.name)}</a>`
           : `<span class="nm">${esc(a.name)}</span>`) : `<span class="nm">${esc(a.name)}</span>`;
-        const pth = a.url && a.path ? `<span class="pth">${esc(a.path)}</span>` : (a.path && !a.url ? `<span class="pth">${esc(a.path)}</span>` : "");
-        const ty = a.type ? `<span class="muted">${esc(a.type)}</span>` : "";
-        return `<li>${nm}${a.description ? ` <span class="muted">— ${esc(a.description)}</span>` : ""}${ty ? " " + ty : ""}${pth ? `<br>${pth}` : ""}</li>`;
+        const inline = inlineAsset(r, a, i);
+        const block = inline
+          ? (inline.kind === "image"
+              ? `<img class="artimg" loading="lazy" src="${esc(inline.href)}" alt="${esc(a.name)}">`
+              : inline.kind === "md"
+                ? `<div class="md-body" data-md-src="${esc(inline.href)}"><span class="muted">加载文件中…</span></div>`
+                : `<div class="htmlslot" data-html-src="${esc(inline.href)}"><span class="muted">加载中…</span></div>`)
+          : "";
+        const pth = inline ? "" : (a.url && a.path ? `<span class="pth">${esc(a.path)}</span>` : (a.path && !a.url ? `<span class="pth">${esc(a.path)}</span>` : ""));
+        const ty = a.type && !inline ? `<span class="muted">${esc(a.type)}</span>` : "";
+        return `<li>${nm}${a.description ? ` <span class="muted">— ${esc(a.description)}</span>` : ""}${ty ? " " + ty : ""}${pth ? `<br>${pth}` : ""}${block ? `<div style="flex:1 0 100%">${block}</div>` : ""}</li>`;
       }).join("");
       const links = (r.links || []).map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noreferrer">${esc(l.label)}</a>`).join("");
       body = `<div class="result-card">
         <span class="kind result">result</span><h4 style="display:inline">${esc(r.title)}</h4>
         ${r.summary ? `<div class="sum">${esc(r.summary)}</div>` : ""}
+        ${mdBlock}${htmlBlock}
         ${metrics ? `<div class="metrics">${metrics}</div>` : ""}
         ${arts ? `<ul class="art">${arts}</ul>` : ""}
         ${links ? `<div class="links">${links}</div>` : ""}
@@ -562,7 +722,49 @@
       return;
     }
     box.innerHTML = rows.map(entryHtml).join("");
+    hydrate(box);
     if (state.follow && atBottom) box.scrollTop = box.scrollHeight;
+  }
+
+  /* ---------------- "我的面板" — static sites double as a bookmark page for local live panels ---------------- */
+
+  function initMyPanels() {
+    const KEY = "report-mcp.myPanels";
+    $("myPanels").classList.remove("hidden");
+    const load = () => {
+      try { const v = JSON.parse(localStorage.getItem(KEY)); return Array.isArray(v) ? v : []; }
+      catch { return []; }
+    };
+    const save = (v) => { try { localStorage.setItem(KEY, JSON.stringify(v)); } catch { /* private mode */ } };
+    const renderMp = () => {
+      $("mpList").innerHTML = load().map((u, i) =>
+        `<a class="mp-item" href="${esc(u)}" target="_blank" rel="noreferrer noopener">` +
+        `<span style="flex:1">${esc(u)}</span><button class="mp-del" data-i="${i}" title="移除">×</button></a>`).join("");
+      $("mpList").querySelectorAll(".mp-del").forEach((b) =>
+        b.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const v = load();
+          v.splice(Number(b.dataset.i), 1);
+          save(v);
+          renderMp();
+        }));
+    };
+    const add = () => {
+      let u = null;
+      try { u = new URL($("mpUrl").value.trim()); } catch { /* not a URL */ }
+      if (!u || (u.protocol !== "http:" && u.protocol !== "https:")) {
+        $("mpList").innerHTML = '<div class="mp-err">请输入 http(s) 地址</div>';
+        return;
+      }
+      const v = load();
+      if (!v.includes(u.origin)) { v.push(u.origin); save(v); }
+      $("mpUrl").value = "";
+      renderMp();
+    };
+    $("mpAdd").addEventListener("click", add);
+    $("mpUrl").addEventListener("keydown", (e) => { if (e.key === "Enter") add(); });
+    renderMp();
   }
 
   /* ---------------- wiring ---------------- */
@@ -597,6 +799,7 @@
   if (DS.kind === "static") {
     $("modeChip").classList.remove("hidden");
     $("homePath").textContent = "演示数据 · 静态站点（无后端）";
+    initMyPanels();
   } else {
     fetch("/api/health").then((r) => r.json()).then((d) => { if (d.home) $("homePath").textContent = d.home; }).catch(() => {});
   }

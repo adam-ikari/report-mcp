@@ -15,7 +15,7 @@ agent ──report_* tools──▶ MCP(stdio) ──▶ JSONL 落盘 ──▶ 
 
 ```bash
 npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp.git
-report-mcp --version    # report-mcp 0.1.1
+report-mcp --version    # report-mcp 0.2.0
 ```
 
 约 20 秒，装完只保留生产依赖。
@@ -27,7 +27,7 @@ report-mcp --version    # report-mcp 0.1.1
 
 ```bash
 ls -ld "$(npm root -g)/report-mcp"   # 应是普通目录，后面没有 "-> ..."
-report-mcp --version                 # report-mcp 0.1.1
+report-mcp --version                 # report-mcp 0.2.0
 ```
 
 :::

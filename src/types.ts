@@ -26,11 +26,14 @@ export type RecordKind = "start" | "progress" | "status" | "log" | "result" | "e
 export interface Artifact {
   /** Human-readable name, e.g. "Final report". */
   name: string;
-  /** Local filesystem path, absolute or relative to the agent's cwd. */
+  /** Local filesystem path. Absolute is recommended; relative resolves against the server's cwd. */
   path?: string;
   /** Remote or local URL. */
   url?: string;
-  /** Free-form type hint, e.g. "markdown", "csv", "image". */
+  /**
+   * Free-form type hint. `image`, `markdown` and `html` artifacts with a
+   * `path` are rendered inline by the panel via `GET /api/file`.
+   */
   type?: string;
   description?: string;
   size?: number;
@@ -97,6 +100,10 @@ export interface ResultRecord extends BaseRecord {
   title: string;
   summary?: string;
   status?: RunStatus;
+  /** Markdown body, rendered with typography in the panel. */
+  markdown?: string;
+  /** Standalone HTML fragment/document, rendered in a sandboxed iframe. */
+  html?: string;
   artifacts?: Artifact[];
   metrics?: Metric[];
   links?: Link[];

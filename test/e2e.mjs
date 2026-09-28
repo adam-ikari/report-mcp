@@ -181,8 +181,13 @@ try {
   await A.call("report_result", {
     title: "对比矩阵",
     summary: "五个方案横向对比完成。",
+    markdown: "### 结论\n\n- 混合方案**最优**",
+    html: "<p><em>sandbox probe</em></p>",
     metrics: [{ name: "行数", value: 1284, unit: "条" }, { name: "维度", value: 9, unit: "项" }],
-    artifacts: [{ name: "matrix.csv", path: "/tmp/matrix.csv", type: "csv" }],
+    artifacts: [
+      { name: "matrix.csv", path: "/tmp/matrix.csv", type: "csv" },
+      { name: "chart", path: path.join(here, "fixtures", "chart.png"), type: "image" },
+    ],
     links: [{ label: "看板", url: "https://example.com/board" }],
     data: { ok: true },
   });
@@ -191,8 +196,22 @@ try {
   const card = P.dom.window.document.querySelector(".result-card");
   check("metrics rendered", card.querySelectorAll(".metric").length === 2,
     "got " + card.querySelectorAll(".metric").length);
-  check("artifact rendered", card.querySelectorAll("ul.art li").length === 1,
+  check("artifact rendered", card.querySelectorAll("ul.art li").length === 2,
     "got " + card.querySelectorAll("ul.art li").length);
+  check("markdown field rendered through the tool path",
+    !!card.querySelector(".md-body strong"));
+  check("html field sandboxed through the tool path", (() => {
+    const f = card.querySelector("iframe.arthtml");
+    return !!f && f.getAttribute("sandbox") === "allow-scripts" && f.getAttribute("srcdoc").includes("sandbox probe");
+  })());
+  const eimg = card.querySelector(".artimg");
+  check("image artifact served from tool-written record", await waitFor(async () => {
+    if (!eimg || !String(eimg.getAttribute("src")).startsWith("/api/file?")) return false;
+    const r = await fetch(A.panelUrl + eimg.getAttribute("src"));
+    if (!r.ok) return false;
+    const b = new Uint8Array(await r.arrayBuffer());
+    return b[0] === 0x89 && b[1] === 0x50;
+  }), eimg?.getAttribute("src"));
   check("result counted in header", await waitFor(() => P.txt("rMeta").includes("结果")), P.txt("rMeta"));
 
   const end = await A.call("report_end", { status: "done", summary: "全部完成，遗留项见结果卡。" });

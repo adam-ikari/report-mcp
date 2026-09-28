@@ -10,9 +10,12 @@ const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 
 const artifactSchema = z.object({
   name: z.string().min(1).describe("Human-readable name of the artifact."),
-  path: z.string().optional().describe("Filesystem path (absolute or relative to the agent's cwd)."),
+  path: z.string().optional().describe("Filesystem path. Prefer an absolute path; relative resolves against the server's cwd."),
   url: z.string().optional().describe("Remote or local URL."),
-  type: z.string().optional().describe('Free-form type, e.g. "markdown", "csv", "image".'),
+  type: z
+    .string()
+    .optional()
+    .describe('Type hint. "image", "markdown" and "html" files are rendered inline in the panel (SVG is not served).'),
   description: z.string().optional(),
   size: z.number().optional().describe("Size in bytes."),
 });
@@ -47,7 +50,7 @@ function fail(error: unknown): ToolResult {
 }
 
 export function createServer(store: Store, panelUrl: string): McpServer {
-  const server = new McpServer({ name: "report-mcp", version: "0.1.1" });
+  const server = new McpServer({ name: "report-mcp", version: "0.2.0" });
 
   const viewUrl = (runId: string) => `${panelUrl}/#/run/${encodeURIComponent(runId)}`;
 
@@ -174,21 +177,29 @@ export function createServer(store: Store, panelUrl: string): McpServer {
       description:
         "Deliver a structured result to the human (one-way, non-blocking). Call once per meaningful " +
         "deliverable: a finished analysis, a generated file, a decision. Results render as highlighted " +
-        "cards in the panel. This does not end the run — call report_end afterwards.",
+        "cards in the panel; `markdown` is typeset and `html` is shown in a sandboxed iframe. " +
+        "This does not end the run — call report_end afterwards.",
       inputSchema: {
         title: z.string().min(1).describe("What was delivered."),
         summary: z.string().optional().describe("2-5 sentence human-facing summary of the outcome."),
         status: z.enum(RUN_STATUSES).optional().describe('Status implied by this result, default "done".'),
+        markdown: z.string().optional().describe("Markdown body rendered with typography in the panel."),
+        html: z
+          .string()
+          .optional()
+          .describe("Standalone HTML rendered in a sandboxed iframe (scripts run, isolated from the panel)."),
         artifacts: z.array(artifactSchema).optional().describe("Files or resources produced."),
         metrics: z.array(metricSchema).optional().describe("Key numbers worth surfacing."),
         links: z.array(linkSchema).optional().describe("Related URLs."),
         data: z.any().optional().describe("Arbitrary structured payload for machine consumption."),
       },
     },
-    async ({ title, summary, status, artifacts, metrics, links, data }) => {
+    async ({ title, summary, status, markdown, html, artifacts, metrics, links, data }) => {
       const body: Record<string, unknown> = { title };
       if (summary) body.summary = summary;
       if (status) body.status = status;
+      if (markdown) body.markdown = markdown;
+      if (html) body.html = html;
       if (artifacts) body.artifacts = artifacts;
       if (metrics) body.metrics = metrics;
       if (links) body.links = links;

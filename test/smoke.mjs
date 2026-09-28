@@ -1,6 +1,10 @@
 import fs from "node:fs";
+import path from "node:path";
 
 import { connectMcp, waitFor } from "./harness.mjs";
+import { FIXTURES_DIR } from "./fixtures.mjs";
+
+const FIX = (n) => path.join(FIXTURES_DIR, n);
 
 const HOME = process.env.SMOKE_HOME || "/tmp/opencode/report-home-smoke";
 fs.rmSync(HOME, { recursive: true, force: true }); // self-contained: no leftovers from prior runs
@@ -58,8 +62,16 @@ try {
 
   const res = text(await rpc("tools/call", { name: "report_result", arguments: {
     title: "分析完成", summary: "共处理 3 个文件，产出 1 份报告。",
+    markdown: "### 小结\n\n- 3 个文件**均已处理**",
+    html: "<p><strong>inline html probe</strong></p>",
     metrics: [{ name: "记录数", value: 1284, unit: "条" }, { name: "耗时", value: 3.2, unit: "s", hint: "p95" }],
-    artifacts: [{ name: "report.md", path: "/tmp/report.md", type: "markdown" }],
+    artifacts: [
+      { name: "chart.png", path: FIX("chart.png"), type: "image" },
+      { name: "notes.md", path: FIX("notes.md"), type: "markdown" },
+      { name: "board.html", path: FIX("panel.html"), type: "html" },
+      { name: "run.sh", path: "/tmp/report.sh", type: "sh" },
+      { name: "ghost.png", path: "/tmp/report-mcp-ghost-missing.png", type: "image" },
+    ],
     links: [{ label: "看板", url: "https://example.com/board" }],
     data: { ok: true, rows: 1284 },
   } }));
@@ -102,6 +114,35 @@ try {
 
   const html = await (await fetch(panelUrl + "/")).text();
   check("GET / serves panel", html.includes("Agent Report") && html.includes("report_progress"), html.length + " bytes");
+
+  // --- GET /api/file: controlled artifact serving ---
+  const F = (q) => fetch(panelUrl + "/api/file?run=" + encodeURIComponent(runId) + "&" + q);
+  const png = await F("seq=6&i=0");
+  const pngBuf = new Uint8Array(await png.arrayBuffer());
+  check("file: png served with real type + magic", png.status === 200 &&
+    png.headers.get("content-type") === "image/png" &&
+    pngBuf[0] === 0x89 && pngBuf[1] === 0x50 && pngBuf[2] === 0x4e && pngBuf[3] === 0x47,
+    `ct=${png.headers.get("content-type")} bytes=${pngBuf.length}`);
+  check("file: nosniff + no-store", png.headers.get("x-content-type-options") === "nosniff" &&
+    png.headers.get("cache-control") === "no-store");
+  const md = await F("seq=6&i=1");
+  const mdText = await md.text();
+  check("file: markdown as text/plain", md.status === 200 &&
+    (md.headers.get("content-type") || "").startsWith("text/plain") && mdText.includes("权重最高"),
+    md.headers.get("content-type"));
+  const hres = await F("seq=6&i=2");
+  const htext = await hres.text();
+  check("file: html served as text/plain, never as a document", hres.status === 200 &&
+    (hres.headers.get("content-type") || "").startsWith("text/plain") &&
+    htext.includes("<script>"), hres.headers.get("content-type"));
+  check("file: no CORS headers on file responses", hres.headers.get("access-control-allow-origin") === null);
+  check("file: 403 for non-allowlisted extension", (await F("seq=6&i=3")).status === 403);
+  check("file: 404 unknown run", (await fetch(panelUrl + "/api/file?run=run_missing_0000&seq=1&i=0")).status === 404);
+  check("file: 404 non-result record", (await F("seq=2&i=0")).status === 404);
+  check("file: 404 artifact index out of range", (await F("seq=6&i=9")).status === 404);
+  check("file: 404 when the recorded path is gone", (await F("seq=6&i=4")).status === 404);
+  check("file: 400 malformed run id", (await fetch(panelUrl + "/api/file?run=../../etc&seq=1&i=0")).status === 400);
+  check("file: 400 non-integer seq", (await F("seq=1.5&i=0")).status === 400);
 
   // --- SSE tail of a *new* record ---
   const ac = new AbortController();

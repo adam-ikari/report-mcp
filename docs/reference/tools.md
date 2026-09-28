@@ -69,12 +69,35 @@
 |---|---|---|---|
 | `title` | `string` | ✅ | 交付物标题 |
 | `summary` | `string` | | 人话总结 |
+| `markdown` | `string` | | Markdown 正文，面板内排版渲染（标题/列表/引用/代码块/链接） |
+| `html` | `string` | | 一段完整 HTML，面板以 **sandbox iframe** 渲染：脚本可运行，但与父页面完全隔离 |
 | `artifacts[]` | `object[]` | | `{name, path?, url?, type?, description?, size?}` |
 | `metrics[]` | `object[]` | | `{name, value: number\|string, unit?, hint?}` |
 | `links[]` | `object[]` | | `{label, url}` |
 | `data` | `any` | | 任意结构，面板折叠展示 |
 
 **每个有意义的交付物调一次**，不是每条日志。它**不结束** run。
+
+### 文件工件规则（`artifacts[].path`）
+
+- `type` 为 `image` / `markdown` / `html` 且只有 `path`（没有 `url`）时，面板会**内联渲染**这个文件：图片直接显示，markdown 排版展开，html 进 sandbox iframe。其余类型仍是文件名 + 路径条目。
+- 图片支持 `png` `jpg` `jpeg` `gif` `webp`；文本支持 `md` `markdown` `txt` `html` `htm`。**`svg` 不服务**（它是同源的脚本载体）。
+- **建议报绝对路径**。相对路径按 server 进程的 cwd 解析——通常就是 agent 的 cwd，但跨进程共享 run 时未必。
+- `html` 文件永远以 `text/plain` 响应；把它渲染成文档是面板的职责（注入 CSP 后进 sandbox iframe），浏览器直接打开文件地址只会看到源码。
+- 单文件默认上限 **20 MiB**，用 `REPORT_MCP_MAX_FILE_BYTES` 覆盖。
+- 可选加固：`REPORT_MCP_FILE_ROOTS`（冒号分隔的目录白名单），设了之后白名单外的路径一律 403。配 `REPORT_MCP_HOST=0.0.0.0` 暴露面板时建议启用。
+
+例：一份带图、带排版正文的成果卡——
+
+```jsonc
+{ "title": "销量分析",
+  "markdown": "## 结论\n\n- Q3 环比 **+18%**\n- 华东区贡献最大",
+  "artifacts": [
+    { "name": "趋势图", "path": "/abs/out/trend.png", "type": "image" },
+    { "name": "明细报告", "path": "/abs/out/report.md", "type": "markdown" }
+  ],
+  "metrics": [{ "name": "环比", "value": 18, "unit": "%" }] }
+```
 
 ## `report_end`
 

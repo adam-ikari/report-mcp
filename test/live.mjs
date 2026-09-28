@@ -1,6 +1,8 @@
 import fs from "node:fs";
+import path from "node:path";
 
 import { createEventSourceShim, createFetcher, waitFor } from "./harness.mjs";
+import { FIXTURES_DIR } from "./fixtures.mjs";
 
 const { JSDOM, VirtualConsole } = await import("jsdom");
 const vc = new VirtualConsole();
@@ -80,6 +82,28 @@ check("sidebar shows err badge for this run",
   await waitFor(() => !!currentItem()?.querySelector(".chip.error")),
   currentItem()?.textContent.replace(/\s+/g, " ").trim().slice(0, 90));
 
+// --- agent reports a rich result live ---
+append(mk(next++, "result", {
+  title: "对比图已生成",
+  summary: "得分分布见附图。",
+  markdown: "- **混合方案**胜出",
+  artifacts: [{ name: "chart", path: path.join(FIXTURES_DIR, "chart.png"), type: "image" }],
+}));
+check("result entry appears live", await waitFor(() => entries() === 9), "entries=" + entries());
+const artImg = $("timeline").querySelector(".artimg");
+check("image artifact inlined in live render", !!artImg &&
+  String(artImg.getAttribute("src")).startsWith("/api/file?"), artImg?.getAttribute("src"));
+check("markdown field typeset live", !!$("timeline").querySelector(".result-card .md-body strong"),
+  $("timeline").querySelector(".result-card .md-body")?.textContent.trim().slice(0, 40));
+if (artImg) {
+  const pngRes = await fetch(ORIGIN + artImg.getAttribute("src"));
+  const pngBytes = new Uint8Array(await pngRes.arrayBuffer());
+  check("live-served image is the PNG", pngRes.status === 200 && pngBytes[0] === 0x89 && pngBytes[3] === 0x47,
+    "bytes=" + pngBytes.length);
+} else {
+  check("live-served image is the PNG", false, "no .artimg");
+}
+
 // --- agent finishes the run live ---
 append(mk(next++, "end", { status: "done", summary: "e2e 全绿。", durationMs: 204000 }));
 check("end flips status chip",
@@ -87,7 +111,7 @@ check("end flips status chip",
   $("rStatus").className);
 check("end entry rendered", $("timeline").textContent.includes("e2e 全绿"), "entries=" + entries());
 check("duration shown", await waitFor(() => $("rMeta").textContent.includes("3m 24s")), $("rMeta").textContent.slice(0, 140));
-check("final count 9", $("rMeta").textContent.includes("记录 9"), $("rMeta").textContent.slice(0, 140));
+check("final count 10", $("rMeta").textContent.includes("记录 10"), $("rMeta").textContent.slice(0, 140));
 check("sidebar status updated", await waitFor(() => window.document.querySelectorAll(".run-item .chip.done").length >= 1));
 
 console.log("\nfinal: entries=" + entries() + " meta=" + $("rMeta").textContent);

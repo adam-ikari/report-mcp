@@ -14,7 +14,7 @@ import { Store } from "./store.js";
 import { startPanel } from "./panel.js";
 import { createServer } from "./server.js";
 
-const VERSION = "0.1.1";
+const VERSION = "0.2.0";
 
 async function main(): Promise<void> {
   if (process.argv.includes("--version") || process.argv.includes("-v")) {

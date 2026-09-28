@@ -7,6 +7,13 @@
  * Timestamps are relative to `Date.now()`, so regenerate the demo bundle on
  * every deploy (the Pages workflow does this) to keep the relative times fresh.
  */
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
+const fixture = (name) => path.join(FIXTURES, name);
+
+export const FIXTURES_DIR = FIXTURES;
 
 function emit(runId, kind, body, seq, tsMs) {
   return { ...body, id: `id-${runId}-${seq}`, runId, seq, ts: new Date(tsMs).toISOString(), kind };
@@ -38,6 +45,12 @@ export function buildRuns() {
         title: "agent→human 汇报机制对比",
         summary: "对比了 5 类通道：stdio 直写、结构化日志、Web 面板、通知推送与混合方案。结论是本地 Web 面板 + JSONL 落盘在可审计性和实时性之间最均衡。",
         status: "done",
+        markdown:
+          "### 评分口径\n\n- 可审计性**权重最高**（0.4）\n- 实时性次之\n\n> 混合方案：Web 面板 + JSONL 落盘\n\n" +
+          "<script>alert(1)</script>",
+        html:
+          '<div style="font:14px system-ui;padding:12px;background:#f5f7fa;color:#222;border-radius:8px">' +
+          "<p>各通道综合得分</p><p><strong>Web 面板 + JSONL = 8.6/10</strong></p></div>",
         metrics: [
           { name: "纳入方案", value: 5, unit: "个" },
           { name: "覆盖文献", value: 23, unit: "篇" },
@@ -45,8 +58,11 @@ export function buildRuns() {
           { name: "综合得分", value: 8.6, unit: "/10", hint: "混合方案" },
         ],
         artifacts: [
-          { name: "survey.md", path: "/home/gem/project/report_mcp/docs/survey.md", type: "markdown", description: "完整综述" },
-          { name: "matrix.csv", path: "/tmp/matrix.csv", type: "csv", description: "对比矩阵" },
+          { name: "survey.md", path: fixture("survey.md"), type: "markdown", description: "完整综述" },
+          { name: "matrix.csv", path: fixture("matrix.csv"), type: "csv", description: "对比矩阵" },
+          { name: "评分分布", path: fixture("chart.png"), type: "image", description: "各方案得分热力" },
+          { name: "notes.md", path: fixture("notes.md"), type: "markdown", description: "调研笔记" },
+          { name: "对比看板", path: fixture("panel.html"), type: "html", description: "自定义 HTML 呈现" },
         ],
         links: [{ label: "原始笔记", url: "https://example.com/notes" }],
         data: { rows: 23, dims: 9, winner: "web-panel+jsonl" },
