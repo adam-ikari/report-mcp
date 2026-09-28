@@ -47,7 +47,7 @@ function fail(error: unknown): ToolResult {
 }
 
 export function createServer(store: Store, panelUrl: string): McpServer {
-  const server = new McpServer({ name: "report-mcp", version: "0.1.0" });
+  const server = new McpServer({ name: "report-mcp", version: "0.1.1" });
 
   const viewUrl = (runId: string) => `${panelUrl}/#/run/${encodeURIComponent(runId)}`;
 

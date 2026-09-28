@@ -234,7 +234,7 @@ demo bundle 只带原始 `records`，`RunSummary` 依然由页面里同一个 `d
 
 ```bash
 npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp.git
-report-mcp --version    # report-mcp 0.1.0
+report-mcp --version    # report-mcp 0.1.1
 ```
 
 约 20 秒装完，只保留生产依赖。**分发渠道是 Git**：

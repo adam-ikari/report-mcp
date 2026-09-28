@@ -32,7 +32,7 @@ function fail(error) {
     };
 }
 export function createServer(store, panelUrl) {
-    const server = new McpServer({ name: "report-mcp", version: "0.1.0" });
+    const server = new McpServer({ name: "report-mcp", version: "0.1.1" });
     const viewUrl = (runId) => `${panelUrl}/#/run/${encodeURIComponent(runId)}`;
     /** Every tool is fire-and-forget: it returns as soon as the record is on disk. */
     async function record(kind, body) {
