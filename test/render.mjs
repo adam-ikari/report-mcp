@@ -1,5 +1,7 @@
 import { JSDOM } from "jsdom";
 
+import { waitFor } from "./harness.mjs";
+
 const ORIGIN = process.env.TEST_PANEL_URL || "http://127.0.0.1:7788";
 const html = await (await fetch(ORIGIN + "/")).text();
 
@@ -22,9 +24,11 @@ const dom = new JSDOM(html, {
 
 const { window } = dom;
 const $ = (id) => window.document.getElementById(id);
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-await sleep(1200);
+// Initial paint is two REST fetches; a fixed sleep left too little margin
+// under load, so wait for both panes to be populated before asserting.
+await waitFor(() => window.document.querySelectorAll(".run-item").length === 3 &&
+  window.document.querySelectorAll(".entry").length > 0);
 
 console.log("\n--- sidebar ---");
 const items = [...window.document.querySelectorAll(".run-item")];
@@ -82,7 +86,7 @@ check("back to all → 13", window.document.querySelectorAll(".entry").length ==
 console.log("\n--- switching runs ---");
 const failedItem = items.find((i) => i.textContent.includes("同步 CRM"));
 failedItem.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-await sleep(800);
+await waitFor(() => $("rTitle").textContent === "同步 CRM 联系人");
 check("switched to failed run", $("rTitle").textContent === "同步 CRM 联系人", $("rTitle").textContent);
 check("failed chip", $("rStatus").textContent === "failed", $("rStatus").className);
 check("hash updated", window.location.hash.includes("run_20260923220100_ee33ff"), window.location.hash);
@@ -102,10 +106,12 @@ const dom2 = new JSDOM(html, {
     w.addEventListener("error", () => {});
   },
 });
-// No backend and no demo bundle: boot only settles once loadDemo() times out.
-await new Promise((r) => setTimeout(r, 3200));
-const empty = dom2.window.document.getElementById("empty");
+// No backend and no demo bundle: boot only settles once loadDemo() times out
+// (~2s script timer) and loadRuns renders the fallback. #empty is visible in
+// the initial HTML, so gate on the sidebar fallback — the last DOM write.
 const list = dom2.window.document.getElementById("runList");
+await waitFor(() => list.textContent.includes("暂无运行记录"), { timeout: 8000 });
+const empty = dom2.window.document.getElementById("empty");
 check("offline degrades to empty state, no crash", !empty.classList.contains("hidden"));
 check("sidebar shows fallback message", list.textContent.includes("暂无运行记录"), list.textContent.trim().slice(0, 40));
 check("empty state shows config hint", empty.textContent.includes("mcpServers"));

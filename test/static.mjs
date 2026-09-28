@@ -9,8 +9,9 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { setTimeout as sleep } from "node:timers/promises";
 import { JSDOM, VirtualConsole } from "jsdom";
+
+import { waitFor } from "./harness.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(here, "..", "public");
@@ -85,7 +86,9 @@ const { server, url } = await serveStatic({ withDemo: true });
 const { dom } = await boot(url);
 const $ = (id) => dom.window.document.getElementById(id);
 const entries = () => dom.window.document.querySelectorAll(".entry").length;
-await sleep(1200);
+// Wait for the demo boot to actually render (bundle script + two data loads)
+// instead of assuming a fixed delay.
+await waitFor(() => dom.window.document.querySelectorAll(".run-item").length === 3 && entries() > 0);
 
 console.log("--- static site (GitHub Pages) ---");
 check("no backend → still renders", !$("detail").classList.contains("hidden") || !$("empty").classList.contains("hidden"));
@@ -101,7 +104,7 @@ check("auto-opened first run with full timeline", entries() === 6, "entries=" + 
 
 const completed = [...dom.window.document.querySelectorAll(".run-item")].find((i) => i.textContent.includes("MCP 报告协议调研"));
 completed.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-await sleep(400);
+await waitFor(() => entries() === 13);
 check("switch to completed run → 13 entries", entries() === 13, "entries=" + entries());
 check("result card rendered from demo data", !!dom.window.document.querySelector(".result-card"));
 check("metrics grid rendered", dom.window.document.querySelectorAll(".result-card .metric").length === 4,
@@ -119,7 +122,10 @@ dom.window.close();
 console.log("\n--- static site, demo-data.js absent ---");
 const s2 = await serveStatic({ withDemo: false });
 const b2 = await boot(s2.url);
-await sleep(900);
+// #empty is visible in the initial HTML, so it cannot mark boot as settled.
+// The sidebar fallback is the last DOM write of the no-bundle path.
+await waitFor(() => b2.dom.window.document.getElementById("runList").textContent.includes("暂无运行记录"),
+  { timeout: 8000 });
 const empty2 = b2.dom.window.document.getElementById("empty");
 check("falls back to empty state, no crash", !empty2.classList.contains("hidden"));
 check("empty state offers config hint", empty2.textContent.includes("mcpServers"));

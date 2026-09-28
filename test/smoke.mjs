@@ -1,7 +1,6 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import fs from "node:fs";
 
-import { connectMcp } from "./harness.mjs";
+import { connectMcp, waitFor } from "./harness.mjs";
 
 const HOME = process.env.SMOKE_HOME || "/tmp/opencode/report-home-smoke";
 fs.rmSync(HOME, { recursive: true, force: true }); // self-contained: no leftovers from prior runs
@@ -77,8 +76,13 @@ try {
   check("panelUrl consistent", panel.panelUrl === start.panelUrl, panel.panelUrl);
 
   // --- HTTP panel ---
-  await sleep(300);
-  const runs = await (await fetch(panelUrl + "/api/runs")).json();
+  // The run summary is derived after the final append lands; retry the read
+  // until it shows the finished run instead of sleeping a guess.
+  let runs = [];
+  await waitFor(async () => {
+    runs = await (await fetch(panelUrl + "/api/runs")).json();
+    return runs.length === 1 && runs[0]?.title === "冒烟测试运行";
+  });
   check("GET /api/runs", runs.length === 1 && runs[0].title === "冒烟测试运行", JSON.stringify(runs[0]));
   const s = runs[0];
   check("summary derived", s.status === "done" && s.recordCount === 7 && s.logCounts.warn === 1
@@ -125,7 +129,10 @@ try {
     ac.abort();
   })();
 
-  await sleep(500);
+  // The stream seeds with everything already on disk plus a `runs` event, so
+  // seeing the seed means the subscription is live and the next append must
+  // arrive as a tail event.
+  await waitFor(() => seen.some((x) => x.event === "runs"));
   await rpc("tools/call", { name: "report_log", arguments: { message: "sse-tail" } });
   await streamDone.catch(() => {});
   const tailed = seen.find((x) => x.event === "record" && JSON.parse(x.data).message === "sse-tail");

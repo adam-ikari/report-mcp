@@ -297,15 +297,17 @@ try {
 
   /* ---------------- phase 4: both runs in one sidebar ---------------- */
   console.log("\n--- phase 4: sidebar across processes ---");
-  const items = R.items();
-  check("both runs listed", items.length === 2, "items=" + items.length);
-  check("most recently active run first", items[0]?.textContent.includes("双写者"),
-    items.map((i) => i.querySelector(".t")?.textContent).join(" | "));
+  // The sidebar reloads through the 600ms-debounced `runs` event, so it can
+  // trail the detail pane; re-query per check because reloads replace nodes.
+  const sidebar = () => R.items();
+  check("both runs listed", await waitFor(() => sidebar().length === 2), "items=" + sidebar().length);
+  check("most recently active run first", await waitFor(() => sidebar()[0]?.textContent.includes("双写者")),
+    sidebar().map((i) => i.querySelector(".t")?.textContent).join(" | "));
   check("both runs marked done",
-    items.every((i) => i.querySelector(".chip")?.textContent === "done"),
-    items.map((i) => i.querySelector(".chip")?.textContent).join(" | "));
+    await waitFor(() => sidebar().every((i) => i.querySelector(".chip")?.textContent === "done")),
+    sidebar().map((i) => i.querySelector(".chip")?.textContent).join(" | "));
 
-  R.click(items[1]);
+  R.click(sidebar()[1]);
   check("switching to the other run loads it",
     await waitFor(() => R.$("rTitle")?.textContent === TITLE1), R.txt("rTitle"));
   check("switched run keeps its own record count",
