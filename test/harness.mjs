@@ -177,10 +177,13 @@ export async function connectMcp(env, { serverPath = SERVER, timeout = 15000 } =
     failAll(`could not spawn server: ${e.message}`);
   });
 
-  const up = await waitFor(() => Boolean(meta.panelUrl), { timeout, interval: 50 });
+  // The boot lines arrive as separate stderr writes in the order
+  // panel → storage → run id; resolving on the first alone races callers
+  // that assert on runId immediately after connect.
+  const up = await waitFor(() => Boolean(meta.panelUrl && meta.runId && meta.storage), { timeout, interval: 50 });
   if (!up) {
     proc.kill("SIGKILL");
-    throw new Error(`server never announced a panel (exit=${exitedWith})\n${stderrBuf}`);
+    throw new Error(`server never announced boot lines (exit=${exitedWith})\n${stderrBuf}`);
   }
 
   function rpc(method, params) {
