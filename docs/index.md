@@ -15,6 +15,7 @@ hero:
     - theme: alt
       text: 在线 Demo
       link: /panel/
+      target: _blank
 
 features:
   - title: 单向，不阻塞

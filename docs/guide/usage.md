@@ -53,7 +53,7 @@
 { "status": "done", "summary": "综述与对比矩阵均已交付，遗留 1 篇待补。" }
 ```
 
-面板上的样子见[在线 Demo](/panel/)（那是示例数据）。
+面板上的样子见[在线 Demo](https://adam-ikari.github.io/report-mcp/panel/)（那是示例数据）。
 
 ---
 

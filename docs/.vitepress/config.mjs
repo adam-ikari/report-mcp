@@ -42,7 +42,7 @@ export default defineConfig({
     nav: [
       { text: "指南", link: "/guide/install" },
       { text: "参考", link: "/reference/tools" },
-      { text: "在线 Demo", link: "/panel/" },
+      { text: "在线 Demo", link: "/panel/", target: "_blank" },
       { text: "GitHub", link: "https://github.com/adam-ikari/report-mcp" },
     ],
 
