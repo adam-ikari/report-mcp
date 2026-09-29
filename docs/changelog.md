@@ -8,8 +8,11 @@ npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp
 
 ## Unreleased
 
-面板渲染修复（截图时暴露出来的两个真 bug）：
+## v0.3.1 · 2026-09-29
 
+里程碑汇报节奏约定 + 面板渲染修复：
+
+- **`report_progress` 提示词：不要频繁汇报。** tool 描述现明确要求仅在里程碑完成时调用——阶段切换、交付物落地、进度有实质变化；避免 agent 逐条刷进度，污染时间线
 - **sandbox iframe 的内联样式不再被吞。** iframe 注入的 CSP 里通配符并不覆盖 `style=` 属性，agent 提供的 HTML 只要靠内联样式就会掉进裸文本渲染；`style-src` 现在显式放行 `'unsafe-inline'`（iframe 本就是 opaque origin，风险不变）
 - **时间线的 `PROGRESS` 徽章不再被裁半。** 它与顶栏进度条的 `.progress`（固定 7px 高 + overflow hidden）撞了类名，规则收窄到 `.progress-wrap` 之内
 - Demo 的自定义 HTML 记分板改为深色全幅排版，与面板主题一致

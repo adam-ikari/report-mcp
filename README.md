@@ -247,7 +247,7 @@ demo bundle 只带原始 `records`，`RunSummary` 依然由页面里同一个 `d
 
 ```bash
 npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp.git
-report-mcp --version    # report-mcp 0.3.0
+report-mcp --version    # report-mcp 0.3.1
 ```
 
 约 20 秒装完，只保留生产依赖。**分发渠道是 Git**：
@@ -291,9 +291,9 @@ report-mcp --version    # report-mcp 0.3.0
 
 然后在 agent 的系统提示里给一句使用约定，例如：
 
-> 任务开始时调用 `report_start`；每个阶段切换或进度有实质变化时调用 `report_progress`；
-> 需要我决策时调用 `report_status` 设为 `blocked`；每个交付物调用一次 `report_result`；
-> 结束时调用 `report_end`。这些调用不阻塞，随手调即可。
+> 任务开始时调用 `report_start`；**不要频繁汇报**，仅在里程碑完成时（阶段切换、交付物落地、进度有实质变化）
+> 调用 `report_progress`；需要我决策时调用 `report_status` 设为 `blocked`；每个交付物调用一次
+> `report_result`；结束时调用 `report_end`。这些调用不阻塞，随手调即可。
 
 ---
 

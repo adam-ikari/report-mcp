@@ -14,3 +14,6 @@ docs/.vitepress/cache/
 docs/public/panel/
 *.log
 .DS_Store
+
+# editor local tooling state
+.qoder/

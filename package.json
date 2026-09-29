@@ -1,6 +1,6 @@
 {
   "name": "report-mcp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "One-way agent -> human reporting MCP: progress, status, logs and structured results, persisted as JSONL and streamed to a local web panel.",
   "type": "module",
   "license": "MIT",

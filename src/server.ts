@@ -50,7 +50,7 @@ function fail(error: unknown): ToolResult {
 }
 
 export function createServer(store: Store, getPanelUrl: () => string): McpServer {
-  const server = new McpServer({ name: "report-mcp", version: "0.3.0" });
+  const server = new McpServer({ name: "report-mcp", version: "0.3.1" });
 
   // A getter, not a string: an attached process is promoted to host at some
   // point mid-session, and tool replies must carry the live URL from then on.
@@ -108,8 +108,9 @@ export function createServer(store: Store, getPanelUrl: () => string): McpServer
     {
       title: "Report progress",
       description:
-        "Push a progress update (one-way, non-blocking). Use it at each phase boundary or when the " +
-        "percentage moves materially. `percent` is 0-100; omit it for an indeterminate phase. " +
+        "Push a progress update (one-way, non-blocking). Do NOT report frequently — call it only at " +
+        "milestone completions: a phase boundary reached, a deliverable finished, or the percentage " +
+        "moving materially. `percent` is 0-100; omit it for an indeterminate phase. " +
         "The latest progress record drives the panel's progress bar and run list.",
       inputSchema: {
         phase: z.string().min(1).describe('Current phase, e.g. "searching literature".'),
