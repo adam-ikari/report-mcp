@@ -22,7 +22,9 @@ const SERVER = path.join(here, "..", "dist", "index.js");
 const HOME = path.join(here, ".tmp-home");
 const SMOKE_HOME = path.join(here, ".tmp-smoke");
 const E2E_HOME = path.join(here, ".tmp-e2e");
-const PORT = Number(process.env.TEST_PANEL_PORT || 7788);
+// Deliberately *not* 7788: that is the shared production default now, and a
+// real agent session on this machine may legitimately hold it while tests run.
+const PORT = Number(process.env.TEST_PANEL_PORT || 7811);
 const ORIGIN = `http://127.0.0.1:${PORT}`;
 
 function run(cmd, args, env) {
@@ -73,7 +75,7 @@ if (!up) {
 }
 console.log(`panel ready: ${ORIGIN}`);
 
-const suites = ["e2e.mjs", "render.mjs", "live.mjs", "smoke.mjs", "static.mjs"];
+const suites = ["e2e.mjs", "render.mjs", "live.mjs", "smoke.mjs", "static.mjs", "single.mjs"];
 const failed = [];
 for (const s of suites) {
   console.log(`\n=== ${s} ===`);

@@ -2,8 +2,11 @@ import http from "node:http";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { setTimeout as sleep } from "node:timers/promises";
 import { parseRecords, summarize } from "./store.js";
 const HTML_PATH = fileURLToPath(new URL("../public/index.html", import.meta.url));
+/** Every session aims here first; binding it is how one process wins the host election. */
+const DEFAULT_PORT = 7788;
 function sseHeaders() {
     return {
         "Content-Type": "text/event-stream; charset=utf-8",
@@ -146,10 +149,26 @@ async function flushTail(store, client) {
         }
     }
 }
+/** Is `url` a live report-mcp panel serving our storage home? */
+async function probePanel(url, expectHome) {
+    try {
+        const res = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(1500) });
+        if (!res.ok)
+            return false;
+        const data = (await res.json());
+        // Same-home check: a panel on our port serving a *different* REPORT_MCP_HOME
+        // must not swallow our agents' links — those runs would be invisible there.
+        return data.ok === true && data.home === expectHome;
+    }
+    catch {
+        return false;
+    }
+}
 export async function startPanel(store) {
     const clients = new Set();
-    const preferred = Number(process.env.REPORT_MCP_PORT ?? 0);
+    const preferred = Number(process.env.REPORT_MCP_PORT ?? DEFAULT_PORT);
     const host = process.env.REPORT_MCP_HOST?.trim() || "127.0.0.1";
+    const hostUrl = (p) => `http://${host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host}:${p}`;
     let html = "";
     try {
         html = await fsp.readFile(HTML_PATH, "utf8");
@@ -296,17 +315,100 @@ export async function startPanel(store) {
         }
     }, 20000);
     ping.unref?.();
-    const port = await listen(server, preferred, host);
-    const url = `http://${host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host}:${port}`;
-    store.writePanelState(url);
+    let url = "";
+    let port = 0;
+    let attached = false;
+    let takeover;
+    let takingOver = false;
+    function bind(p) {
+        return new Promise((resolve, reject) => {
+            const onError = (err) => {
+                server.removeListener("listening", onListening);
+                reject(err);
+            };
+            const onListening = () => {
+                server.removeListener("error", onError);
+                const addr = server.address();
+                resolve(typeof addr === "object" && addr ? addr.port : p);
+            };
+            server.once("error", onError);
+            server.once("listening", onListening);
+            server.listen(p, host);
+        });
+    }
+    /** Win the election: grab the shared port and publish ourselves as the host. */
+    async function promote() {
+        try {
+            port = await bind(preferred);
+        }
+        catch (err) {
+            if (err.code === "EADDRINUSE")
+                return false;
+            throw err;
+        }
+        url = hostUrl(port);
+        if (attached)
+            console.error(`[report-mcp] promoted to panel host: ${url}`);
+        attached = false;
+        if (takeover)
+            clearInterval(takeover);
+        takeover = undefined;
+        store.writePanelState(url);
+        return true;
+    }
+    if (!(await promote())) {
+        // The shared port is taken. Attach if it is a same-home report-mcp panel;
+        // otherwise treat it as a foreign squatter and run a private panel instead.
+        if (await probePanel(hostUrl(preferred), store.home)) {
+            url = hostUrl(preferred);
+            attached = true;
+            // Watch the host: when its agent session ends, whoever binds the port
+            // next becomes the new host — within ~5s of the old one letting go.
+            takeover = setInterval(() => {
+                if (takingOver)
+                    return;
+                takingOver = true;
+                void (async () => {
+                    try {
+                        if (await probePanel(url, store.home))
+                            return; // host still alive
+                        for (let i = 0; i < 5; i++) {
+                            if (await promote())
+                                return;
+                            // Lost the race; if the winner is a same-home panel, keep it attached.
+                            if (await probePanel(hostUrl(preferred), store.home))
+                                return;
+                            await sleep(200);
+                        }
+                        // Next tick retries.
+                    }
+                    catch (err) {
+                        console.error(`[report-mcp] takeover failed: ${err instanceof Error ? err.message : err}`);
+                    }
+                    finally {
+                        takingOver = false;
+                    }
+                })();
+            }, 5000);
+            takeover.unref?.();
+        }
+        else {
+            port = await bind(0);
+            url = hostUrl(port);
+            store.writePanelState(url);
+        }
+    }
     return {
-        url,
+        getUrl: () => url,
         port,
+        isAttached: () => attached,
         async close() {
             clearInterval(sweep);
             clearInterval(ping);
+            if (takeover)
+                clearInterval(takeover);
             unsubscribe();
-            store.clearPanelState();
+            store.clearPanelState(); // pid-guarded: never clears another host's state
             for (const c of clients) {
                 try {
                     c.res.end();
@@ -317,35 +419,11 @@ export async function startPanel(store) {
             }
             clients.clear();
             store.close();
-            await new Promise((resolve) => server.close(() => resolve()));
+            if (server.listening) {
+                await new Promise((resolve) => server.close(() => resolve()));
+            }
         },
     };
-}
-async function listen(server, preferred, host) {
-    const tryPort = (p) => new Promise((resolve, reject) => {
-        const onError = (err) => {
-            server.removeListener("listening", onListening);
-            reject(err);
-        };
-        const onListening = () => {
-            server.removeListener("error", onError);
-            const addr = server.address();
-            resolve(typeof addr === "object" && addr ? addr.port : p);
-        };
-        server.once("error", onError);
-        server.once("listening", onListening);
-        server.listen(p, host);
-    });
-    try {
-        return await tryPort(preferred);
-    }
-    catch (err) {
-        if (err.code === "EADDRINUSE" && preferred !== 0) {
-            // Someone already holds the configured port; fall back to an ephemeral one.
-            return await tryPort(0);
-        }
-        throw err;
-    }
 }
 /** Convenience for tests / CLI use. */
 export { summarize };

@@ -49,10 +49,13 @@ function fail(error: unknown): ToolResult {
   };
 }
 
-export function createServer(store: Store, panelUrl: string): McpServer {
-  const server = new McpServer({ name: "report-mcp", version: "0.2.0" });
+export function createServer(store: Store, getPanelUrl: () => string): McpServer {
+  const server = new McpServer({ name: "report-mcp", version: "0.3.0" });
 
-  const viewUrl = (runId: string) => `${panelUrl}/#/run/${encodeURIComponent(runId)}`;
+  // A getter, not a string: an attached process is promoted to host at some
+  // point mid-session, and tool replies must carry the live URL from then on.
+  const panelUrl = () => getPanelUrl();
+  const viewUrl = (runId: string) => `${panelUrl()}/#/run/${encodeURIComponent(runId)}`;
 
   /** Every tool is fire-and-forget: it returns as soon as the record is on disk. */
   async function record(
@@ -66,7 +69,7 @@ export function createServer(store: Store, panelUrl: string): McpServer {
         runId: store.runId,
         seq: rec.seq,
         kind: rec.kind,
-        panelUrl,
+        panelUrl: panelUrl(),
         viewUrl: viewUrl(store.runId),
       });
     } catch (err) {
@@ -233,7 +236,7 @@ export function createServer(store: Store, panelUrl: string): McpServer {
           seq: rec.seq,
           kind: rec.kind,
           durationMs: body.durationMs ?? null,
-          panelUrl,
+          panelUrl: panelUrl(),
           viewUrl: viewUrl(store.runId),
         });
       } catch (err) {
@@ -256,7 +259,7 @@ export function createServer(store: Store, panelUrl: string): McpServer {
         const data = await store.readRun(store.runId);
         return ok({
           runId: store.runId,
-          panelUrl,
+          panelUrl: panelUrl(),
           viewUrl: viewUrl(store.runId),
           status: data?.summary.status ?? "running",
           recordCount: data?.records.length ?? 0,

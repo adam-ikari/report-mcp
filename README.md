@@ -215,7 +215,7 @@ demo bundle 只带原始 `records`，`RunSummary` 依然由页面里同一个 `d
 | `GET` | `/api/runs/:id` | `{summary, records[]}` 全量 |
 | `GET` | `/api/stream?run=:id` | SSE：`record`（全量预载 + 增量）、`runs`（列表变更） |
 
-只读。绑定 `127.0.0.1`，默认端口 `0`（自动分配空闲端口；若配置的端口被占则自动降级到随机端口）。
+只读。绑定 `127.0.0.1`，默认端口 **7788**，单实例语义：第一个绑上端口的 report-mcp 进程成为面板宿主，其余 agent 进程探测到同存储的活面板后**不再各开一份**，直接 attach 共享它（详见 §7 配置）。若端口被无关程序占用，退回随机端口各自开私有面板。
 
 ---
 
@@ -224,11 +224,20 @@ demo bundle 只带原始 `records`，`RunSummary` 依然由页面里同一个 `d
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
 | `REPORT_MCP_HOME` | `~/.report-mcp` | 存储根目录（`runs/*.jsonl`、`panel.json`） |
-| `REPORT_MCP_PORT` | `0` | 面板端口，`0` = 自动 |
+| `REPORT_MCP_PORT` | `7788` | 面板端口。同端口的多个进程**共享一个面板**：先到者为宿主，后来者 attach；`0` = 私有随机端口，不共享 |
 | `REPORT_MCP_HOST` | `127.0.0.1` | 绑定地址 |
 | `REPORT_MCP_RUN_ID` | 自动生成 | 固定 run id，让多个 MCP 实例写进同一次运行 |
 
 启动时会把诊断信息打到 **stderr**（面板 URL、存储路径、run id），`$REPORT_MCP_HOME/panel.json` 里也会写一份 `{url, pid, runId}`。
+
+### 面板单实例：多个 agent 共享同一块屏
+
+每台机器 × 每个存储根目录只跑**一个**面板进程。仲裁不需要协商协议——**端口绑定本身就是锁**：
+
+1. 启动时尝试绑 `REPORT_MCP_PORT`（默认 7788）。绑上 = 当宿主。
+2. `EADDRINUSE` 时探测该端口的 `GET /api/health`：返回 `ok` 且 `home` 与自己相同 → **attach**：不开服务、不写 `panel.json`，工具返回值里的 `panelUrl`/`viewUrl` 直接指向宿主面板。记录照常写共享 JSONL，宿主面板的文件监听会把它们实时推给所有浏览器。
+3. 宿主会话结束后，处于 attach 状态的进程每 5s 探测一次，发现宿主死亡就重新竞选端口——**约 5s 内自动接管**，面板 URL 不变，历史不丢。
+4. 端口被无关程序占用（health 探测不通或 home 不符）→ 退回随机端口开私有面板，行为同旧版。
 
 ---
 
@@ -238,7 +247,7 @@ demo bundle 只带原始 `records`，`RunSummary` 依然由页面里同一个 `d
 
 ```bash
 npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp.git
-report-mcp --version    # report-mcp 0.2.0
+report-mcp --version    # report-mcp 0.3.0
 ```
 
 约 20 秒装完，只保留生产依赖。**分发渠道是 Git**：
@@ -260,7 +269,7 @@ report-mcp --version    # report-mcp 0.2.0
   "mcpServers": {
     "report": {
       "command": "report-mcp",
-      "env": { "REPORT_MCP_PORT": "7788" }   // 可选：固定端口方便收藏
+      "env": { "REPORT_MCP_PORT": "7788" }   // 可省略：默认就是 7788（共享面板端口）
     }
   }
 }
@@ -391,8 +400,9 @@ npm run docs:dev    # 本地开发服务器
 | `test/render.mjs` | jsdom 里真实渲染：侧栏、头部、时间线 13 条记录、成果卡片、筛选、切换 run、XSS 转义、离线降级 |
 | `test/live.mjs` | 带 EventSource shim：**在窗口外直接往 JSONL 追加记录，断言 DOM 在 700ms 内更新**，含状态翻转与筛选 |
 | `test/static.mjs` | **无后端路径**（即 Pages 环境）：探测到没有后端、挂 DEMO 角标、从 demo bundle 渲染 13 条记录与成果卡片、不开 SSE；以及 bundle 缺失时落到空状态 |
+| `test/single.mjs` | **面板单实例**：端口绑定竞选、同 home attach、宿主退出 ~5s 内接管（URL 不变、历史不丢）、异物占用退回私有端口、跨 home 不共享 |
 
-部署后另有**线上核验**：`node test/verify-pages.mjs`，对 `<https://adam-ikari.github.io/report-mcp/>` 起 jsdom 断言 25 项（深链、成果卡片、筛选、无尾斜杠入口）。它**故意不进 `npm test`**——把发布门禁挂在别人家的 CDN 上，等于给自己装了一个会随机变红的闸机。
+部署后另有**线上核验**：`node test/verify-pages.mjs`，对 `<https://adam-ikari.github.io/report-mcp/>` 起 jsdom 断言 44 项（深链、成果卡片、富内容水合、sandbox 帧、筛选、无尾斜杠入口）。它**故意不进 `npm test`**——把发布门禁挂在别人家的 CDN 上，等于给自己装了一个会随机变红的闸机。
 
 ### 目录
 
@@ -401,7 +411,7 @@ src/
   index.ts    入口：起面板 → 建 MCP server → 接 stdio，处理退出清理
   server.ts   7 个 tool 的 zod schema 与 handler
   store.ts    RunWriter(append/seq 同步) + summarize(派生) + 按文件 watch + 面板状态
-  panel.ts    HTTP 路由、SSE、增量 tail、兜底 sweep
+  panel.ts    HTTP 路由、SSE、增量 tail、兜底 sweep、单实例仲裁与接管
   types.ts    六种记录的判别联合 + RunSummary
 public/
   index.html       面板（单文件，无依赖，live/static 双模式）

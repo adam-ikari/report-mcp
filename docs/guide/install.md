@@ -15,7 +15,7 @@ agent ──report_* tools──▶ MCP(stdio) ──▶ JSONL 落盘 ──▶ 
 
 ```bash
 npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp.git
-report-mcp --version    # report-mcp 0.2.0
+report-mcp --version    # report-mcp 0.3.0
 ```
 
 约 20 秒，装完只保留生产依赖。
@@ -27,7 +27,7 @@ report-mcp --version    # report-mcp 0.2.0
 
 ```bash
 ls -ld "$(npm root -g)/report-mcp"   # 应是普通目录，后面没有 "-> ..."
-report-mcp --version                 # report-mcp 0.2.0
+report-mcp --version                 # report-mcp 0.3.0
 ```
 
 :::
@@ -84,7 +84,7 @@ npm test                # 可选：5 套，160 条断言
 
 配置文件位置：opencode 是 `opencode.json`，Claude Desktop 是 `claude_desktop_config.json`。
 
-`REPORT_MCP_PORT` 可省略——不设就是 `0`（自动挑一个空闲端口），面板 URL 会出现在每个 tool 的返回值里。固定端口只是为了方便收藏。
+`REPORT_MCP_PORT` 可省略——默认 `7788`，这是**共享面板端口**：同机同存储的多个 agent 进程只有第一个成为面板宿主，其余自动 attach 到同一个面板（详见下一节）。只有想要每人一块私屏时才设 `0`（随机私有端口，不共享）。
 
 ## 让 agent 知道该在什么时候汇报
 
@@ -101,11 +101,17 @@ npm test                # 可选：5 套，160 条断言
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
 | `REPORT_MCP_HOME` | `~/.report-mcp` | 存储根目录（`runs/*.jsonl`、`panel.json`） |
-| `REPORT_MCP_PORT` | `0` | 面板端口，`0` = 自动 |
+| `REPORT_MCP_PORT` | `7788` | 面板端口。同端口的多个进程**共享一个面板**：先到者为宿主，后来者 attach；`0` = 私有随机端口，不共享 |
 | `REPORT_MCP_HOST` | `127.0.0.1` | 绑定地址 |
 | `REPORT_MCP_RUN_ID` | 自动生成 | 固定 run id，让多个 MCP 实例写进同一次运行 |
 
 启动时的诊断信息打到 **stderr**（面板 URL、存储路径、run id），`$REPORT_MCP_HOME/panel.json` 里也会写一份 `{url, pid, runId}`。
+
+### 多个 agent，一块屏
+
+每个 agent 会话都会 spawn 自己的 report-mcp 进程，但**面板只有一个**。仲裁靠端口绑定：第一个绑上 `7788` 的进程当宿主；后来的进程遇到 `EADDRINUSE` 就探测该端口的 `/api/health`，确认是**同一个存储根目录**的活面板后进入 attach 模式——自己不开服务，工具返回值里的链接直接指向宿主面板。所有进程照常写同一份共享 JSONL，宿主面板的文件监听把它们全部实时推出去。
+
+宿主会话退出后，attach 中的进程会在 **~5 秒内**自动竞选接管，URL 不变、历史不丢。若 `7788` 被无关程序占用（健康探测不通或存储目录不符），各进程退回随机端口开私有面板——行为同旧版，日志里会注明 `(host)` 还是 `(attached · shared host)`。
 
 ## 验证接入成功
 

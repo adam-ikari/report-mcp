@@ -14,7 +14,7 @@ import { Store } from "./store.js";
 import { startPanel } from "./panel.js";
 import { createServer } from "./server.js";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 async function main(): Promise<void> {
   if (process.argv.includes("--version") || process.argv.includes("-v")) {
@@ -28,7 +28,8 @@ async function main(): Promise<void> {
         "",
         "Environment:",
         "  REPORT_MCP_HOME    storage root        (default ~/.report-mcp)",
-        "  REPORT_MCP_PORT    panel port          (default 0 = ephemeral)",
+        "  REPORT_MCP_PORT    panel port          (default 7788; one shared panel,",
+        "                     later agents attach to it; 0 = private ephemeral port)",
         "  REPORT_MCP_HOST    panel bind address  (default 127.0.0.1)",
         "  REPORT_MCP_RUN_ID  share one run across several MCP servers",
         "",
@@ -42,7 +43,7 @@ async function main(): Promise<void> {
 
   const store = new Store();
   const panel = await startPanel(store);
-  const server = createServer(store, panel.url);
+  const server = createServer(store, panel.getUrl);
   const transport = new StdioServerTransport();
 
   let closing = false;
@@ -73,7 +74,11 @@ async function main(): Promise<void> {
   });
   transport.onclose = () => void shutdown(0);
 
-  console.error(`[report-mcp] panel    ${panel.url}/#/run/${encodeURIComponent(store.runId)}`);
+  console.error(
+    `[report-mcp] panel    ${panel.getUrl()}/#/run/${encodeURIComponent(store.runId)}  ${
+      panel.isAttached() ? "(attached · shared host)" : "(host)"
+    }`,
+  );
   console.error(`[report-mcp] storage  ${store.runsDir}`);
   console.error(`[report-mcp] run id   ${store.runId}`);
 

@@ -104,7 +104,7 @@ export default defineConfig({
 
     footer: {
       message: "agent → 人类的单向汇报通道 · MIT License",
-      copyright: "report-mcp v0.2.0",
+      copyright: "report-mcp v0.3.0",
     },
   },
 });

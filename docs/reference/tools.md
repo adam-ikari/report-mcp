@@ -127,4 +127,6 @@
 
 每个 tool 都带 `panelUrl`（面板根地址）和 `viewUrl`（直指当前 run 的深链）。人类拿到 `viewUrl` 点开即可，不需要再导航。
 
+`panelUrl` 可能指向**另一个 agent 进程托管的面板**——同机同存储的多个 report-mcp 进程共享单实例，后来者 attach 到宿主，链接统一指向宿主地址。这是设计行为，不是串号：所有进程写的都是同一份共享 JSONL。
+
 如果链接被挤出上下文，再调一次 `report_panel` 取回来。
