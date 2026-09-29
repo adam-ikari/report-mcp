@@ -26,6 +26,9 @@ export default defineConfig({
   srcExclude: ["**/panel/**"],
 
   head: [
+    ["link", { rel: "icon", type: "image/svg+xml", href: "/report-mcp/favicon.svg" }],
+    ["link", { rel: "icon", type: "image/png", sizes: "32x32", href: "/report-mcp/favicon-32.png" }],
+    ["link", { rel: "apple-touch-icon", sizes: "180x180", href: "/report-mcp/favicon.png" }],
     ["meta", { name: "theme-color", content: "#4c9aff" }],
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:title", content: "report-mcp" }],
@@ -36,13 +39,19 @@ export default defineConfig({
         content: "agent 向人类汇报的 MCP server：单向、非阻塞、可审计、实时面板",
       },
     ],
+    ["meta", { property: "og:image", content: "https://adam-ikari.github.io/report-mcp/images/og-image.png" }],
+    ["meta", { property: "og:image:alt", content: "report-mcp 面板：左侧 run 列表，右侧实时时间线" }],
+    ["meta", { name: "twitter:card", content: "summary_large_image" }],
+    ["meta", { name: "twitter:image", content: "https://adam-ikari.github.io/report-mcp/images/og-image.png" }],
   ],
 
   themeConfig: {
     nav: [
       { text: "指南", link: "/guide/install" },
       { text: "参考", link: "/reference/tools" },
+      { text: "更新日志", link: "/changelog" },
       { text: "在线 Demo", link: "/panel/", target: "_blank" },
+      { text: "Releases", link: "https://github.com/adam-ikari/report-mcp/releases" },
       { text: "GitHub", link: "https://github.com/adam-ikari/report-mcp" },
     ],
 
@@ -70,6 +79,13 @@ export default defineConfig({
     ],
 
     socialLinks: [{ icon: "github", link: "https://github.com/adam-ikari/report-mcp" }],
+
+    notFound: {
+      title: "404 · 页面不存在",
+      quote: "链接可能写错了，也可能这个 run 早被清掉了。面板不会说谎，但 URL 会过期。",
+      linkText: "回到首页",
+      linkLabel: "回到首页",
+    },
 
     outline: { label: "本页目录", level: [2, 3] },
     lastUpdated: { text: "最后更新" },

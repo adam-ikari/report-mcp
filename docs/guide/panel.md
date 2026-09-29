@@ -30,6 +30,10 @@
 | `artifacts[]` 里 `type` 为 `image` / `markdown` / `html` 的文件 | live 模式经 `GET /api/file` 取回后按上表同样处理：图片直接 `<img>`，md 排版，html 进 sandbox iframe |
 | 其余 artifact / 带 `url` 的 artifact | 维持原样：名称 + 路径或外链 |
 
+下面是 Demo 里一次真实调研的成果卡：metrics 网格、markdown 排版、sandbox HTML 记分板、内联图片。
+
+![成果卡：metrics 网格 + markdown 综述节选 + sandbox HTML 记分板 + 内联图片](/images/panel-result-card.png)
+
 ::: details `/api/file` 为什么算安全
 - 路径**从不来自 query**：只接受 `(run, seq, i)` 三元组，去**存储的 result 记录**里取 `artifacts[i].path`。能问出来的文件，都是 agent 已经主动写进记录的文件。
 - run id 过字符集校验，`seq`/`i` 必须是整数（400）；记录必须存在且是 result 且索引存在（404）。

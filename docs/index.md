@@ -5,6 +5,9 @@ hero:
   name: report-mcp
   text: agent 向人类汇报
   tagline: 单向推送进度、状态、日志与结构化成果，落盘为 JSONL，实时呈现在本地面板。不阻塞、不等待、不要人类点确认。
+  image:
+    src: /report-mcp/images/panel-hero.png
+    alt: report-mcp 面板截图：左侧 run 列表，右侧实时时间线（进度条、日志、状态切换）
   actions:
     - theme: brand
       text: 安装
