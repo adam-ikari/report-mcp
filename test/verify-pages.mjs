@@ -26,6 +26,14 @@ const check = (name, cond, extra) => {
   console.log(`${cond ? "PASS" : "FAIL"}  ${name}${extra != null ? "  " + extra : ""}`);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function waitFor(label, fn, ms = 8000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    try { if (await fn()) return true; } catch { /* not yet */ }
+    await sleep(100);
+  }
+  return false;
+}
 
 /** Where a browser ends up after following GitHub Pages' /repo → /repo/ 301. */
 function canonicalize(href) {
@@ -109,8 +117,29 @@ check("completed run renders 13 records", entries(doc) === 13, "entries=" + entr
 check("result card present", !!doc.querySelector(".result-card"));
 check("metrics grid present", doc.querySelectorAll(".result-card .metric").length === 4,
   "got " + doc.querySelectorAll(".result-card .metric").length);
-check("artifacts present", doc.querySelectorAll(".result-card ul.art li").length === 2,
-  "got " + doc.querySelectorAll(".result-card ul.art li").length);
+check("artifacts present", doc.querySelectorAll(".result-card ul.art > li").length === 5,
+  "got " + doc.querySelectorAll(".result-card ul.art > li").length);
+// Rich content ships with the static bundle: the image renders from
+// panel/assets/, markdown artifacts hydrate, HTML goes into sandbox frames.
+const hydrated = await waitFor("hydration", () =>
+  doc.querySelector("img.artimg") && doc.querySelectorAll(".md-body").length === 3
+  && !doc.querySelector("[data-md-src]"));
+check("static assets hydrated", hydrated,
+  `imgs=${doc.querySelectorAll("img.artimg").length} md=${doc.querySelectorAll(".md-body").length}`);
+const img = doc.querySelector("img.artimg");
+check("image renders from site-relative assets/", !!img && /\/panel\/assets\/chart\.png$/.test(new URL(img.getAttribute("src"), PAGES).pathname),
+  img?.getAttribute("src"));
+check("inline markdown is typeset, raw HTML escaped",
+  [...doc.querySelectorAll(".md-body")].some((b) => b.querySelector("strong"))
+  && ![...doc.querySelectorAll(".md-body")].some((b) => b.querySelector("script")),
+  "md-body count=" + doc.querySelectorAll(".md-body").length);
+const frames = [...doc.querySelectorAll("iframe")];
+check("two sandboxed HTML frames (inline field + file artifact)", frames.length === 2,
+  "got " + frames.length);
+check("sandbox is allow-scripts only", frames.every((f) => f.getAttribute("sandbox") === "allow-scripts"),
+  frames.map((f) => f.getAttribute("sandbox")).join("|"));
+check("file frame carries injected CSP", frames.some((f) => (f.getAttribute("srcdoc") || "").includes("Content-Security-Policy")));
+check("panel.html artifact arrived", frames.some((f) => (f.getAttribute("srcdoc") || "").includes("script-ran")));
 check("status chip = done", txt(doc, "rStatus") === "done", txt(doc, "rStatus"));
 check("progress bar = 100%", barWidth(doc, "rProgress") === "100%", barWidth(doc, "rProgress"));
 check("deep link captured in hash", dom.window.location.hash.includes("run_"), dom.window.location.hash);
