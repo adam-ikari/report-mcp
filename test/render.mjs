@@ -91,10 +91,13 @@ const frames = card.querySelectorAll("iframe.arthtml");
 check("inline html field in sandbox iframe", frames.length === 2 &&
   frames[0].getAttribute("sandbox") === "allow-scripts" &&
   !frames[0].getAttribute("sandbox").includes("allow-same-origin") &&
-  frames[0].getAttribute("srcdoc").includes("Web 面板 + JSONL = 8.6/10"), frames[0]?.getAttribute("sandbox"));
+  frames[0].getAttribute("srcdoc").includes("各通道综合得分") &&
+  frames[0].getAttribute("srcdoc").includes("Web 面板 + JSONL"), frames[0]?.getAttribute("sandbox"));
 const fileFrame = card.querySelector("ul.art li iframe.arthtml");
 check("html file artifact → sandbox iframe", !!fileFrame && fileFrame.getAttribute("sandbox") === "allow-scripts" &&
   fileFrame.getAttribute("srcdoc").includes("Content-Security-Policy") && fileFrame.getAttribute("srcdoc").includes("script-ran"));
+check("frame CSP permits inline styles (wildcards never cover style=)",
+  [...frames].every((f) => /style-src[^;]*'unsafe-inline'/.test(f.getAttribute("srcdoc"))));
 
 console.log("\n--- filtering ---");
 const filterBtn = (label) => [...window.document.querySelectorAll("#filters button")].find((b) => b.textContent === label);

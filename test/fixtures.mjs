@@ -13,6 +13,15 @@ import { fileURLToPath } from "node:url";
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const fixture = (name) => path.join(FIXTURES, name);
 
+/** One labelled score bar for the demo's inline-HTML result block. */
+const scoreRow = (label, score, win = false) =>
+  `<div>` +
+  `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px">` +
+  `<span${win ? ' style="color:#4ec9a5;font-weight:600"' : ""}>${label}</span>` +
+  `<span>${score.toFixed(1)}<span style="color:#8b98a9">/10</span></span></div>` +
+  `<div style="height:8px;border-radius:4px;background:#1c2330">` +
+  `<div style="height:100%;width:${score * 10}%;border-radius:4px;background:${win ? "#4ec9a5" : "#3d7dd8"}"></div></div></div>`;
+
 export const FIXTURES_DIR = FIXTURES;
 
 function emit(runId, kind, body, seq, tsMs) {
@@ -49,8 +58,14 @@ export function buildRuns() {
           "### 评分口径\n\n- 可审计性**权重最高**（0.4）\n- 实时性次之\n\n> 混合方案：Web 面板 + JSONL 落盘\n\n" +
           "<script>alert(1)</script>",
         html:
-          '<div style="font:14px system-ui;padding:12px;background:#f5f7fa;color:#222;border-radius:8px">' +
-          "<p>各通道综合得分</p><p><strong>Web 面板 + JSONL = 8.6/10</strong></p></div>",
+          '<div style="font:14px system-ui;box-sizing:border-box;min-height:100vh;padding:24px 28px;background:#0e1116;color:#dce3ec;display:flex;flex-direction:column;justify-content:space-evenly">' +
+          '<p style="margin:0;font-weight:600;font-size:16px">各通道综合得分</p>' +
+          scoreRow("Web 面板 + JSONL", 8.6, true) +
+          scoreRow("文件落盘 + 定时轮询", 6.4) +
+          scoreRow("stdio 直写", 5.8) +
+          scoreRow("聊天里贴总结", 4.9) +
+          '<p style="margin:0;color:#8b98a9;font-size:12px">加权：可审计性 0.4 · 实时性 0.3 · 接入成本 0.3</p>' +
+          "</div>",
         metrics: [
           { name: "纳入方案", value: 5, unit: "个" },
           { name: "覆盖文献", value: 23, unit: "篇" },

@@ -79,9 +79,10 @@
   .chip.demo { background: rgba(181,122,255,.16); color: #cda8ff; border-color: rgba(181,122,255,.45); cursor: default; }
 
   .progress-wrap { margin-top: 14px; display: flex; align-items: center; gap: 12px; }
-  .progress { flex: 1; height: 7px; background: #212934; border-radius: 5px; overflow: hidden; }
-  .progress i { display: block; height: 100%; background: linear-gradient(90deg,#3b82f6,#4c9aff); transition: width .3s; }
-  .progress.indet i { width: 35% !important; animation: slide 1.4s ease-in-out infinite; }
+  /* Scoped to the header bar: a bare `.progress` would also hit the `kind progress` badge. */
+  .progress-wrap .progress { flex: 1; height: 7px; background: #212934; border-radius: 5px; overflow: hidden; }
+  .progress-wrap .progress i { display: block; height: 100%; background: linear-gradient(90deg,#3b82f6,#4c9aff); transition: width .3s; }
+  .progress-wrap .progress.indet i { width: 35% !important; animation: slide 1.4s ease-in-out infinite; }
   @keyframes slide { 0%{margin-left:-35%} 100%{margin-left:100%} }
   .progress-label { font-size: 12px; color: var(--muted); min-width: 46px; text-align: right; font-variant-numeric: tabular-nums; }
 
@@ -348,7 +349,10 @@
     return out.join("\n").replace(/\u0000(\d+)\u0000/g, (_m, i) => stash[Number(i)] || "");
   }
 
-  const FRAME_CSP = '<meta http-equiv="Content-Security-Policy" content="default-src *; script-src * \'unsafe-inline\'; img-src * data:;">';
+  // Wildcard sources never cover `style=` attributes — 'unsafe-inline' must be spelled out
+  // or every inline-styled agent HTML renders unstyled. Script risk stays contained by the
+  // sandbox attribute (opaque origin), not by this list.
+  const FRAME_CSP = '<meta http-equiv="Content-Security-Policy" content="default-src *; script-src * \'unsafe-inline\'; style-src * \'unsafe-inline\'; img-src * data:;">';
   function withCsp(html) {
     const s = String(html);
     if (/<meta\s+http-equiv=["']?content-security-policy/i.test(s)) return s;
