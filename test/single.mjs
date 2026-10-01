@@ -14,27 +14,14 @@
  */
 import fs from "node:fs";
 import http from "node:http";
-import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { connectMcp, waitFor } from "./harness.mjs";
+import { connectMcp, freePort, waitFor } from "./harness.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const HOME1 = path.join(here, ".tmp-single");
 const HOME2 = path.join(here, ".tmp-single2");
-
-/** Ask the OS for a port nobody holds, then get out of its way fast. */
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const s = net.createServer();
-    s.on("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const p = s.address().port;
-      s.close(() => resolve(p));
-    });
-  });
-}
 
 const PORT = Number(process.env.TEST_SINGLE_PORT || (await freePort()));
 const SQUAT_PORT = process.env.TEST_SINGLE_PORT ? PORT + 3 : await freePort();

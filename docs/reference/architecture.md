@@ -7,8 +7,9 @@
 │  单进程 report-mcp                                          │
 │                                                             │
 │  ┌──────────────────┐          ┌─────────────────────────┐  │
-│  │ MCP Server       │          │ HTTP Panel (localhost)  │  │
-│  │ stdio transport  │          │  GET /            面板  │  │
+│  │ MCP Server       │          │ HTTP Panel (127.0.0.1)   │  │
+│  │ stdio transport  │          │  或 0.0.0.0 = 局域网     │  │
+│  │                  │          │  GET /            面板  │  │
 │  │                  │          │  GET /api/runs    列表  │  │
 │  │ report_start     │  append  │  GET /api/runs/:id      │  │
 │  │ report_progress  ├─────────▶│  GET /api/stream  SSE   │  │
@@ -18,12 +19,17 @@
 │  │ report_end       │          ~/.report-mcp/runs/*.jsonl   │
 │  │ report_panel     │                                       │
 │  └──────────────────┘                                       │
+│        │ fire-and-forget（攒批，可选）                        │
+│        ▼                                                   │
+│  Cloudflare Worker（可选镜像）── KV 原始记录 ── summarize()  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 **为什么两个端口面合在一个进程里：** agent 侧走 stdio（MCP 标准），人类侧走 HTTP。分开成两个服务会引入进程发现、端口协商、生命周期同步三个新问题；合在一起，面板 URL 可以直接塞进每个 tool 的返回值里，人类拿到链接就能看。
 
 **为什么面板跑在 stdio server 里而不是单独起：** 同上，且这样 `report_*` 写入和面板读取共享同一个 `Store`，不需要 IPC。
+
+**远端镜像那条边是单向、可丢的。** 推送在本地 append 成功之后才排队，不在任何 tool 的返回路径上，队列有上限，退出时 flush 一次。Worker 挂掉只会让远端面板少几条，不影响 agent，也不会让本地 JSONL 少一条——JSONL 是唯一真相。`summarize()` 在两个运行时里是同一份实现（`src/summarize.ts`），所以本机和远端不会对同一个 run 给出不同状态。
 
 ## 数据模型
 
@@ -75,10 +81,10 @@
   runs/
     run_20260924062926_8cf29b.jsonl   一行一条记录
     run_20260924060500_cc22dd.jsonl
-  panel.json                           {url, pid, runId}
+  panel.json                           {url, urls, pid, runId}
 ```
 
-`REPORT_MCP_HOME` 可以改根目录。
+`REPORT_MCP_HOME` 可以改根目录。`url` 是给人用的首选地址，`urls` 是完整地址列表（只有 `REPORT_MCP_HOST=0.0.0.0` 时才多于一个）。
 
 ## 单实例：仲裁、attach 与接管
 
@@ -88,6 +94,20 @@
 2. `EADDRINUSE` → 探测 `GET /api/health`：`ok` 且 **`home` 与自己一致** → **attach**：不监听、不写 `panel.json`，工具返回值动态读宿主 URL（`createServer` 拿的是 `getUrl()` 而不是字符串）。各进程的记录照常直接写共享 JSONL，宿主的 `fs.watch` + SSE 把它们全部推出去——**写入面本来就去中心化，只有服务面需要单实例**。
 3. attach 状态每 5s 探测宿主；宿主死了（会话退出/SIGTERM）→ 重新 `listen`（200ms×5 退避）。多个 attach 者同时竞选时 OS 序列化绑定，恰好一个成功晋升为新宿主，其余下一轮探测重新 attach。URL 全程不变。
 4. 探测失败（异物占用 / 跨 home）→ 随机端口私有面板。`home` 校验挡的是「不同 `REPORT_MCP_HOME` 的实例互相误认」——否则 A 项目的 agent 链接会指到只有 B 项目数据的面板上。
+
+## 绑定地址与发布地址是两件事
+
+`REPORT_MCP_HOST=0.0.0.0` 只改**对外发布什么地址**，不改仲裁：
+
+| | 用什么地址 | 为什么 |
+|---|---|---|
+| `server.listen()` | 配置的 `host` | 真·绑定 |
+| 端口仲裁探测 | 恒为 `127.0.0.1` | 同端口的面板必然在本机，回环是唯一保证能通的地址 |
+| 工具返回值 / `panel.json` | `advertisedUrls()`：本机非回环网卡枚举结果，私网优先，末尾附回环 | 人类点的是这个；开了局域网时它必须是手机能打开的那个 |
+
+attach 的进程会从宿主 `/api/health` 的 `urls` 字段**接管**这份列表（每个探测周期重读一次），所以配置更窄的后来者不会把自己的回环地址发给用户。宿主给的地址要过滤后才采纳：只收 `http(s)` 且端口与刚探测到的那个一致——**同端口的 http 地址是合法的**（这正是宽绑定宿主发布局域网别名的方式），而另一个端口的地址不是，那不是这块面板。
+
+代价是：同端口、同 `home` 标识的进程可以把一个局域网别名写进你的工具返回值。但这本来就是同一台机器上已经能读你 run 文件的进程，它不写你的地址也得写你的数据。
 
 ::: warning 已知边界
 宿主让出端口与新宿主绑定之间有 ~5s 窗口；此期间浏览器 `EventSource` 会重连循环，页面本身不报错，接管后自动续上。若期间有**新**进程启动，它会因为端口短暂无人监听而直接成为宿主——接管竞态的最终一致靠「先绑上者优先」。

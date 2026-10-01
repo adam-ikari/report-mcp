@@ -1,4 +1,5 @@
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -49,6 +50,38 @@ const FILE_TYPES = {
 };
 const TEXT_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".html", ".htm"]);
 const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+/**
+ * Front-end files the panel HTML pulls in, name → Content-Type.
+ *
+ * An allowlist rather than a path join on the request: the panel is read-only by
+ * design, and there is no reason for a URL to be able to name anything in
+ * `public/` that the document does not reference. `panel.js` is the built React
+ * bundle; the map is its source map, which browsers only fetch when devtools is
+ * open.
+ */
+const PANEL_ASSETS = {
+    "panel.js": "text/javascript; charset=utf-8",
+    "panel.js.map": "application/json; charset=utf-8",
+};
+async function servePanelAsset(name, res) {
+    const type = PANEL_ASSETS[name];
+    if (!type) {
+        json(res, 404, { error: "not found" });
+        return;
+    }
+    const file = path.join(path.dirname(HTML_PATH), name);
+    const buf = await fsp.readFile(file).catch(() => null);
+    if (!buf) {
+        json(res, 404, { error: "panel asset missing — rebuild the package", name });
+        return;
+    }
+    res.writeHead(200, {
+        "Content-Type": type,
+        "Content-Length": buf.length,
+        "Cache-Control": "no-cache",
+    });
+    res.end(buf);
+}
 /**
  * Serve one file artifact of a stored result record. The path never comes
  * from the query string — it is read back out of `artifacts[i]` of the record
@@ -149,26 +182,115 @@ async function flushTail(store, client) {
         }
     }
 }
-/** Is `url` a live report-mcp panel serving our storage home? */
-async function probePanel(url, expectHome) {
+/**
+ * Is `url` a live report-mcp panel serving our storage home, and at which
+ * addresses does *it* say it can be reached?
+ *
+ * The host is authoritative about its own addresses: it may be bound wide and
+ * publishing a LAN URL that this process — configured narrower, or started
+ * before the host — would never have guessed. Returns null when there is no
+ * same-home panel there.
+ */
+async function probePanel(url, expectHome, port) {
     try {
         const res = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(1500) });
         if (!res.ok)
-            return false;
+            return null;
         const data = (await res.json());
         // Same-home check: a panel on our port serving a *different* REPORT_MCP_HOME
         // must not swallow our agents' links — those runs would be invisible there.
-        return data.ok === true && data.home === expectHome;
+        if (data.ok !== true || data.home !== expectHome)
+            return null;
+        // The advertised list is echoed into our own tool replies and banner, so
+        // accept only http(s) URLs on the port we just reached it on. Anything else
+        // is not an address this process is willing to republish on someone's behalf.
+        const urls = Array.isArray(data.urls)
+            ? data.urls.filter((u) => {
+                if (typeof u !== "string")
+                    return false;
+                try {
+                    const parsed = new URL(u);
+                    return ((parsed.protocol === "http:" || parsed.protocol === "https:") &&
+                        parsed.port === String(port));
+                }
+                catch {
+                    return false;
+                }
+            })
+            : [];
+        return { urls };
     }
     catch {
-        return false;
+        return null;
     }
+}
+const IPV4_URL_RE = /^(\d{1,3}\.){3}\d{1,3}$/;
+/**
+ * Is this an IPv4 address worth putting in a link a human will paste?
+ *
+ * 169.254/16 is the autoconfigured link-local range: it is not reachable from
+ * another device in the ordinary case, and advertising it produces a link that
+ * silently fails.
+ */
+function isReachableIPv4(addr) {
+    return IPV4_URL_RE.test(addr) && !addr.startsWith("169.254.");
+}
+/**
+ * Host addresses a phone on the same Wi-Fi could open the panel at, best first.
+ *
+ * Only used when the panel is bound to a wildcard, and only to *advertise*
+ * addresses — nothing here decides what to bind or what to probe. Ordering is a
+ * guess about which adapter a human is on: RFC1918 IPv4 first (every phone
+ * browser has an HTTP client for it), then other IPv4, then IPv6 with the
+ * brackets a URL needs. Link-local IPv6 is last: it is unusable without a scope
+ * id and would only produce a link that silently fails when pasted.
+ */
+function lanAddresses() {
+    const v4 = [];
+    const v6 = [];
+    for (const list of Object.values(os.networkInterfaces())) {
+        for (const ni of list ?? []) {
+            if (!ni || ni.internal)
+                continue;
+            if (ni.family === "IPv4") {
+                if (isReachableIPv4(ni.address) && !v4.includes(ni.address))
+                    v4.push(ni.address);
+            }
+            else if (ni.family === "IPv6") {
+                const bare = ni.address.split("%")[0];
+                const isLinkLocal = /^fe80:/.test(bare.toLowerCase());
+                if (!isLinkLocal && bare && !v6.includes(bare))
+                    v6.push(bare);
+            }
+        }
+    }
+    const priv = (a) => a.startsWith("192.168.") || a.startsWith("10.") || /^172\.(1[6-9]|2\d|3[01])\./.test(a);
+    v4.sort((a, b) => Number(priv(b)) - Number(priv(a)) || a.localeCompare(b));
+    return [...v4, ...v6.map((a) => `[${a}]`)];
 }
 export async function startPanel(store) {
     const clients = new Set();
     const preferred = Number(process.env.REPORT_MCP_PORT ?? DEFAULT_PORT);
     const host = process.env.REPORT_MCP_HOST?.trim() || "127.0.0.1";
-    const hostUrl = (p) => `http://${host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host}:${p}`;
+    const wildcard = host === "0.0.0.0" || host === "::";
+    /**
+     * The address this process reaches its *own* panel at. Loopback for a wildcard
+     * bind: it is the one URL guaranteed to work here, and it is what the host
+     * election must probe — a panel on this port is by definition on this machine.
+     */
+    const selfUrl = (p) => `http://${wildcard ? "127.0.0.1" : host}:${p}`;
+    /**
+     * Addresses to hand a human, best first. Only a wildcard bind produces more
+     * than one; a narrow bind (the default 127.0.0.1) stays unreachable off-box,
+     * so advertising a LAN address for it would be a link that cannot open.
+     */
+    const advertisedUrls = (p) => wildcard ? [...lanAddresses().map((a) => `http://${a}:${p}`), selfUrl(p)] : [selfUrl(p)];
+    // Live view of what we advertise; the health endpoint and the tool replies
+    // both read it, and the takeover path can rewrite it from the host's own list.
+    let urls = [];
+    const setUrls = (p, adopted) => {
+        urls = adopted?.length ? adopted : advertisedUrls(p);
+    };
     let html = "";
     try {
         html = await fsp.readFile(HTML_PATH, "utf8");
@@ -207,8 +329,15 @@ export async function startPanel(store) {
             res.end();
             return;
         }
+        if (PANEL_ASSETS[p.slice(1)] && req.method === "GET") {
+            await servePanelAsset(p.slice(1), res);
+            return;
+        }
         if (p === "/api/health") {
-            json(res, 200, { ok: true, runId: store.runId, home: store.home });
+            // `urls` lets an attaching process adopt how the host wants to be reached
+            // (a LAN address this one would not have guessed) instead of assuming
+            // loopback. Additive: an older panel without it still probes fine.
+            json(res, 200, { ok: true, runId: store.runId, home: store.home, urls });
             return;
         }
         if (p === "/api/runs" && req.method === "GET") {
@@ -315,11 +444,12 @@ export async function startPanel(store) {
         }
     }, 20000);
     ping.unref?.();
-    let url = "";
     let port = 0;
     let attached = false;
     let takeover;
     let takingOver = false;
+    /** The address a human should open: the best of the advertised ones. */
+    const url = () => urls[0] ?? "";
     function bind(p) {
         return new Promise((resolve, reject) => {
             const onError = (err) => {
@@ -346,21 +476,22 @@ export async function startPanel(store) {
                 return false;
             throw err;
         }
-        url = hostUrl(port);
+        setUrls(port);
         if (attached)
-            console.error(`[report-mcp] promoted to panel host: ${url}`);
+            console.error(`[report-mcp] promoted to panel host: ${url()}`);
         attached = false;
         if (takeover)
             clearInterval(takeover);
         takeover = undefined;
-        store.writePanelState(url);
+        store.writePanelState(url(), urls);
         return true;
     }
     if (!(await promote())) {
         // The shared port is taken. Attach if it is a same-home report-mcp panel;
         // otherwise treat it as a foreign squatter and run a private panel instead.
-        if (await probePanel(hostUrl(preferred), store.home)) {
-            url = hostUrl(preferred);
+        const host0 = await probePanel(selfUrl(preferred), store.home, preferred);
+        if (host0) {
+            setUrls(preferred, host0.urls);
             attached = true;
             // Watch the host: when its agent session ends, whoever binds the port
             // next becomes the new host — within ~5s of the old one letting go.
@@ -370,14 +501,22 @@ export async function startPanel(store) {
                 takingOver = true;
                 void (async () => {
                     try {
-                        if (await probePanel(url, store.home))
-                            return; // host still alive
+                        const live = await probePanel(selfUrl(preferred), store.home, preferred);
+                        if (live) {
+                            // Still attached. Re-read the host's addresses each tick: it may
+                            // have been promoted on a machine whose LAN IP differs from ours.
+                            setUrls(preferred, live.urls);
+                            return;
+                        }
                         for (let i = 0; i < 5; i++) {
                             if (await promote())
                                 return;
                             // Lost the race; if the winner is a same-home panel, keep it attached.
-                            if (await probePanel(hostUrl(preferred), store.home))
+                            const winner = await probePanel(selfUrl(preferred), store.home, preferred);
+                            if (winner) {
+                                setUrls(preferred, winner.urls);
                                 return;
+                            }
                             await sleep(200);
                         }
                         // Next tick retries.
@@ -394,12 +533,13 @@ export async function startPanel(store) {
         }
         else {
             port = await bind(0);
-            url = hostUrl(port);
-            store.writePanelState(url);
+            setUrls(port);
+            store.writePanelState(url(), urls);
         }
     }
     return {
-        getUrl: () => url,
+        getUrl: url,
+        getUrls: () => [...urls],
         port,
         isAttached: () => attached,
         async close() {

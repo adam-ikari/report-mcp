@@ -94,6 +94,8 @@ async function openPanel(viewUrl) {
   const dom = new JSDOM(html, {
     url: viewUrl,
     runScripts: "dangerously",
+    // The panel ships as an external bundle; without this jsdom never loads it.
+    resources: "usable",
     pretendToBeVisual: true,
     beforeParse(window) {
       window.fetch = nodeFetch;

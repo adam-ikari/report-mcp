@@ -8,8 +8,10 @@
  *   e2e.mjs    tool call → process boundary → panel DOM, incl. two writers
  *              sharing one run and a SIGKILL/restart. Own home and ports.
  *   smoke.mjs  MCP stdio handshake, every tool, HTTP API, SSE delivery, stdout purity
- *   render.mjs panel rendering in jsdom: sidebar, header, timeline, filters, switching
+ *   render.mjs panel rendering in jsdom: sidebar, header, timeline, filters,
+ *              switching, and the mobile drawer / top bar
  *   live.mjs   append records to the JSONL out-of-band and assert the DOM updates live
+ *   verify-pages.mjs  the panel as a static host serves it (local half; docs half opt-in)
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -75,7 +77,14 @@ if (!up) {
 }
 console.log(`panel ready: ${ORIGIN}`);
 
-const suites = ["e2e.mjs", "render.mjs", "live.mjs", "smoke.mjs", "static.mjs", "single.mjs"];
+// verify-pages.mjs runs its local half here (no network, no deploy): it checks
+// the panel the way a static host serves it, which is the shape that silently
+// rotted when the panel moved from inline script to a bundle. Its docs half stays
+// opt-in via DOCS_URL.
+// remote.mjs boots the actual Cloudflare Worker under miniflare (workerd) and
+// drives it with the real agent mirror. A Worker that is only ever typechecked
+// is a Worker nobody has run.
+const suites = ["e2e.mjs", "render.mjs", "live.mjs", "smoke.mjs", "static.mjs", "single.mjs", "lan.mjs", "remote.mjs", "verify-pages.mjs"];
 const failed = [];
 for (const s of suites) {
   console.log(`\n=== ${s} ===`);

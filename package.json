@@ -13,9 +13,13 @@
     "public"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/build-demo.mjs",
+    "build": "tsc -p tsconfig.json && node panel/build.mjs && node scripts/build-demo.mjs && node scripts/build-worker-assets.mjs",
+    "build:panel": "node panel/build.mjs",
+    "worker:dev": "npm run build && wrangler dev --config worker/wrangler.toml",
+    "worker:deploy": "npm run build && wrangler deploy --config worker/wrangler.toml",
     "demo": "node scripts/build-demo.mjs",
     "watch": "tsc -p tsconfig.json --watch",
+    "watch:panel": "node panel/build.mjs --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node test/run.mjs",
     "start": "node dist/index.js",
@@ -23,7 +27,7 @@
     "docs:dev": "npm run docs:stage && npm --prefix docs run dev",
     "docs:build": "npm run docs:stage && npm --prefix docs run build",
     "docs:preview": "npm --prefix docs run preview",
-    "prepare": "node scripts/build-demo.mjs"
+    "prepare": "node scripts/build-demo.mjs && node scripts/check-panel-build.mjs"
   },
   "engines": {
     "node": ">=18"
@@ -34,7 +38,14 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "antd": "^6.6.5",
+    "dompurify": "^3.4.16",
+    "esbuild": "^0.28.2",
     "jsdom": "^30.1.1",
+    "marked": "^15.0.12",
+    "miniflare": "^4.20260730.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "typescript": "^5.6.0"
   }
 }

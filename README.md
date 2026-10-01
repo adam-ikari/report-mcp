@@ -28,7 +28,7 @@ agent 干活的时候，人类那边是黑盒：要么刷终端日志，要么�
 | ✅ | 单向推送：进度、状态、日志、结构化成果 |
 | ✅ | 落盘可审计（JSONL，append-only） |
 | ✅ | 本地 Web 面板实时展示，跨 run 汇总 |
-| ✅ | 零依赖前端，零配置起步 |
+| ✅ | 零配置起步：一个 HTML + 一个 bundle，打开即用 |
 | ✅ | stdout 纯净，不污染 MCP JSON-RPC |
 
 ### 非目标
@@ -37,7 +37,7 @@ agent 干活的时候，人类那边是黑盒：要么刷终端日志，要么�
 |---|---|
 | ❌ | 阻塞式审批 / 人类回话（见 §9） |
 | ❌ | 外部通知渠道（Webhook / IM / 邮件） |
-| ❌ | 服务端部署、多用户鉴权 |
+| ❌ | 服务端部署、多用户鉴权（`0.0.0.0` 只到局域网，且仍然无鉴权，见 §7） |
 | ❌ | 替代 agent 自己的对话输出——这是给「旁观的人」看的 |
 
 ---
@@ -49,7 +49,8 @@ agent 干活的时候，人类那边是黑盒：要么刷终端日志，要么�
 │  单进程 report-mcp                                          │
 │                                                             │
 │  ┌──────────────────┐          ┌─────────────────────────┐  │
-│  │ MCP Server       │          │ HTTP Panel (localhost)  │  │
+│  │ MCP Server       │          │ HTTP Panel (127.0.0.1)   │  │
+│  │                  │          │  或 0.0.0.0 = 局域网     │  │
 │  │ stdio transport  │          │  GET /            面板  │  │
 │  │                  │          │  GET /api/runs    列表  │  │
 │  │ report_start     │  append  │  GET /api/runs/:id      │  │
@@ -177,16 +178,53 @@ error 级会进 `lastError`，在 run 列表里挂红色 `err` 角标。
 
 ## 5. 面板
 
-单文件 `public/index.html`，无构建、无 CDN、无外部字体。
+**React 19 + Ant Design 6**，由 esbuild 打成**一个** `public/panel.js`（gzip ~189 kB）。没有框架和 dev server，不拉 CDN，不用外部字体。
 
-- **左栏**：run 列表，按**最后活动时间**排序（不是文件 mtime），状态 chip、相对时间、进度条、错误角标
+`public/index.html` 是手写的壳：样式表 + `#root` + 一个 `<script src="panel.js">`。样式表留在 HTML 里而不是从 JSX import —— 窄屏那套规则是承重的，放在它作用的标记旁边更好读；而且 `<style>` 在 bundle 解析前就生效，不会有无样式闪烁。
+
+产物**入库**，和 `dist/` 同一个理由：全局 git 安装没有 devDependencies，装不了 React 和 esbuild。CI 的漂移门禁同时盯两者。
+
+- **左栏**：run 列表**按项目分组**（`tags[0]` → `agent` → `未分组`），组内与组间都按**最后活动时间**排序（不是文件 mtime），状态 chip、相对时间、进度条、错误角标、附加 tag 与 agent 胶囊
 - **右栏头部**：标题、状态 chip、agent/开始时间/耗时/记录数/warn-error 数/结果数/tags/最后错误/失败原因，加一条进度条（不确定态用滑动动画）
 - **时间线**：按 kind 着色，`result` 渲染成果卡片（内联图片 / Markdown 排版 / sandbox iframe HTML），`detail`/`data` 进 `<details>` 折叠
 - **筛选**：全部 / 进度 / 日志 / 结果 / 状态
 - **实时**：SSE 推增量记录，客户端本地重算 summary 所以头部立即更新；另有 15s 全量兜底
 - **自愈**：SSE 断线 `EventSource` 自动重连；`fs.watch` 不可靠的文件系统靠 5s sweep 兜底
 
-所有 agent 提交的文本都经过 HTML 转义后再插入 DOM。
+React 文本子节点自带转义，属性走 `setAttribute`；唯一手写 HTML 字符串的地方（agent 的 markdown）经 **DOMPurify** 白名单过滤，见下。
+
+### 侧栏按项目分组
+
+`report_start` 的 `tags` 一直标着「用于在面板里分组」，可面板在这之前只把它当头部的一行文本显示。这是个没兑现的描述，现在补上：
+
+- 一个 run 只进**一个**组：第一个 tag，没有 tag 就用 `agent`，都没有就进 `未分组`。把同一个 run 复制进它每个 tag 所在的组，侧栏会谎报 run 数量，找那个真正在意的 run 也变成翻找。其余 tag 作为胶囊挂在条目上
+- 组的顺序按**组内最近活动的那条**排，不看组名。你正在做的那个项目会待在第一个位置，跟它的名字字母序无关
+- 组可以折叠，但**当前打开的 run 所在的组钉住不折叠**。把正在读的东西藏起来，比多显示一行表头要糟
+
+### agent 的 markdown：marked + DOMPurify
+
+agent 提交的 markdown 走两步，顺序不能换：
+
+1. `marked` 渲染。**它会把源码里的原始 HTML 原样透传**——完整 markdown（表格、任务列表、脚注）能用全靠这一点，第二步也因为这一点而不能省
+2. `DOMPurify` 按白名单过滤。面板里 agent HTML 只在这一处设防：`result.markdown` 字段，以及经 `/api/file` 取回的 `.md` 制品
+
+前一版是手写的「先整体转义再排版」，它也安全，但允许列表是自己维护的，遇到没实现的 markdown 特性还会静默退化成纯文本。现在换成成熟实现，攻击面由一个审过的库负责。DOMPurify 的配置是严格 allowlist（`ALLOWED_TAGS` / `ALLOWED_ATTR` / `FORBID_*`），`style` 属性、`iframe`、`svg`、`javascript:` 和 `data:` URL 全部挡掉。**往里加一条允许项就是一次安全决策**：别顺手加，也别为了「修好」agent 报的东西改成 `ADD_TAGS`。
+
+### 手机上怎么看
+
+面板按窄屏重排过，不是把桌面版缩小：
+
+| 变化 | 原因 |
+|---|---|
+| run 列表变成**抽屉**（左上角 ☰ 唤出，点遮罩 / Esc / 选中某个 run 都会收起） | 320–430px 上常驻侧栏会吃掉 1/3 屏，剩不下两行时间线 |
+| 顶部一条 **☰ + 当前 run 标题 + 状态 chip** 的窄条 | 侧栏变成浮层后，它就成了「我在看哪个 run」的唯一指示 |
+| 筛选按钮**横向滚动**而不是换行堆三排 | 拇指操作下少一次纵向滚动 |
+| 按钮、run 条目加高到 ~38–40px | 12px 的控件点不准 |
+| 高度用 `100dvh`，留 `env(safe-area-inset-*)` | 移动端浏览器的地址栏会改变视口高度；刘海与 Home 指示条会压住内容 |
+| `-webkit-text-size-adjust: 100%` | iOS 横屏会放大字号，把两栏布局顶破 |
+| 「复制链接」加了 `execCommand` 兜底 | `navigator.clipboard` 只在安全上下文可用，而局域网上的 `http://192.168.x.x` 恰恰不是——没有兜底的话这个按钮在手机上**永远失败** |
+
+抽屉的开关状态放在 `#app.nav-open` 这个 class 上，**不在 JS 里判断视口宽度**：样式表本来就只在窄屏 media query 里认这个 class，桌面端它是死的。这样也不需要 `matchMedia`（jsdom 没有），抽屉逻辑可以照常进单元测试。
 
 ### 双模式：同一个文件既能连后端，也能当静态站
 
@@ -215,7 +253,7 @@ demo bundle 只带原始 `records`，`RunSummary` 依然由页面里同一个 `d
 | `GET` | `/api/runs/:id` | `{summary, records[]}` 全量 |
 | `GET` | `/api/stream?run=:id` | SSE：`record`（全量预载 + 增量）、`runs`（列表变更） |
 
-只读。绑定 `127.0.0.1`，默认端口 **7788**，单实例语义：第一个绑上端口的 report-mcp 进程成为面板宿主，其余 agent 进程探测到同存储的活面板后**不再各开一份**，直接 attach 共享它（详见 §7 配置）。若端口被无关程序占用，退回随机端口各自开私有面板。
+只读。绑定 `127.0.0.1`（`REPORT_MCP_HOST=0.0.0.0` 可改为局域网可访问，见 §7），默认端口 **7788**，单实例语义：第一个绑上端口的 report-mcp 进程成为面板宿主，其余 agent 进程探测到同存储的活面板后**不再各开一份**，直接 attach 共享它（详见 §7 配置）。若端口被无关程序占用，退回随机端口各自开私有面板。
 
 ---
 
@@ -225,17 +263,54 @@ demo bundle 只带原始 `records`，`RunSummary` 依然由页面里同一个 `d
 |---|---|---|
 | `REPORT_MCP_HOME` | `~/.report-mcp` | 存储根目录（`runs/*.jsonl`、`panel.json`） |
 | `REPORT_MCP_PORT` | `7788` | 面板端口。同端口的多个进程**共享一个面板**：先到者为宿主，后来者 attach；`0` = 私有随机端口，不共享 |
-| `REPORT_MCP_HOST` | `127.0.0.1` | 绑定地址 |
+| `REPORT_MCP_HOST` | `127.0.0.1` | 绑定地址。`0.0.0.0` = 局域网可访问（见下） |
+| `REPORT_MCP_FILE_ROOTS` | 不限 | `/api/file` 可读目录白名单，冒号分隔 |
 | `REPORT_MCP_RUN_ID` | 自动生成 | 固定 run id，让多个 MCP 实例写进同一次运行 |
 
-启动时会把诊断信息打到 **stderr**（面板 URL、存储路径、run id），`$REPORT_MCP_HOME/panel.json` 里也会写一份 `{url, pid, runId}`。
+启动时会把诊断信息打到 **stderr**（面板 URL、存储路径、run id），`$REPORT_MCP_HOME/panel.json` 里也会写一份 `{url, urls, pid, runId}`。
+
+### 局域网访问：手机上直接看汇报
+
+面板默认只绑 `127.0.0.1`。想让同一 Wi-Fi 下的手机 / 平板 / 另一台电脑打开，设一个环境变量即可：
+
+```json
+{
+  "mcpServers": {
+    "report": {
+      "command": "node",
+      "args": ["/absolute/path/report_mcp/dist/index.js"],
+      "env": { "REPORT_MCP_HOST": "0.0.0.0" }
+    }
+  }
+}
+```
+
+绑成 `0.0.0.0` 之后，**所有可点地址都会自己算出来并打出来**，不用再 `ipconfig` 找 IP：
+
+```
+[report-mcp] panel    http://192.168.1.57:7788/#/run/run_2026...  (host)
+[report-mcp] lan      http://127.0.0.1:7788/#/run/run_2026...
+```
+
+- 枚举本机非回环网卡，**RFC1918 私网地址优先**（192.168 → 10.x → 172.16-31），其次其他 IPv4，最后是不带 scope id 的全局 IPv6（link-local 被丢弃：粘出来的链接必然打不开）。多个地址就打印多行。
+- 工具返回值里的 `panelUrl` / `viewUrl` 用的是**第一个地址**，也就是那个手机能打开的。attach 到共享面板的进程会从 `/api/health` 读宿主的地址列表，所以**所有 agent 报出来的链接都是同一个可点地址**，不会出现一半 `127.0.0.1`、一半局域网 IP。
+- 仲裁逻辑不受影响：端口探测始终走 `127.0.0.1`（同端口的面板必然在本机），只有**对外发布的地址**会变。
+- 绑 `::` 等价于绑所有 v4/v6。
+
+::: warning 无鉴权
+`0.0.0.0` 意味着**同一网段任何设备都能读到全部 run 详情**——`detail` / `data` 会原样展示 agent 提交的任意负载。不要把它映射到公网。真要收紧：
+
+- 设 `REPORT_MCP_FILE_ROOTS`（冒号分隔的目录白名单），把 `/api/file` 能读的文件圈进你自己的目录
+- 用防火墙按来源 IP 限制（macOS 的「隔墙防火墙」、Linux 的 `ufw`）
+
+:::
 
 ### 面板单实例：多个 agent 共享同一块屏
 
 每台机器 × 每个存储根目录只跑**一个**面板进程。仲裁不需要协商协议——**端口绑定本身就是锁**：
 
 1. 启动时尝试绑 `REPORT_MCP_PORT`（默认 7788）。绑上 = 当宿主。
-2. `EADDRINUSE` 时探测该端口的 `GET /api/health`：返回 `ok` 且 `home` 与自己相同 → **attach**：不开服务、不写 `panel.json`，工具返回值里的 `panelUrl`/`viewUrl` 直接指向宿主面板。记录照常写共享 JSONL，宿主面板的文件监听会把它们实时推给所有浏览器。
+2. `EADDRINUSE` 时探测该端口的 `GET /api/health`：返回 `ok` 且 `home` 与自己相同 → **attach**：不开服务、不写 `panel.json`，工具返回值里的 `panelUrl`/`viewUrl` 直接指向宿主面板（连宿主对外发布的地址一起接管）。记录照常写共享 JSONL，宿主面板的文件监听会把它们实时推给所有浏览器。
 3. 宿主会话结束后，处于 attach 状态的进程每 5s 探测一次，发现宿主死亡就重新竞选端口——**约 5s 内自动接管**，面板 URL 不变，历史不丢。
 4. 端口被无关程序占用（health 探测不通或 home 不符）→ 退回随机端口开私有面板，行为同旧版。
 
@@ -320,8 +395,8 @@ report-mcp --version    # report-mcp 0.3.1
 已知局限：
 
 - **并发 append 无锁**。`seq` 重同步靠「append 前比对文件大小」，这是 check-then-act 而非原子操作：两个进程**真正同时**落到同一个窗口仍可能撞号。`test/e2e.mjs` 覆盖的是**交错**写入——agent 逐条 await tool 调用，即实际使用节奏——证明这种情况无重号无断档；真并发不在保证范围内。一次 MCP 连接对应一个 run，`REPORT_MCP_RUN_ID` 共享时建议低频写入。
-- **面板只在 jsdom 里验证过**。没有起真实 Chromium：布局/CSS、浏览器原生 `EventSource` 的重连行为、多标签一致性都没测。数据流和 DOM 结构是测住的，视觉与浏览器差异不是。
-- **单机 localhost**。没有鉴权，也没有 TLS；绑定 `127.0.0.1` 意味着只服务本机。
+- **面板只在 jsdom 里验证过**。没有起真实 Chromium：布局/CSS、浏览器原生 `EventSource` 的重连行为、多标签一致性都没测。数据流和 DOM 结构是测住的，视觉与浏览器差异不是。窄屏布局是手工用 headless Chromium 把面板塞进 390×780 / 320×640 的 iframe 里看过的（iframe 内的 media query 跟着 frame 的盒子走），抽屉能开、侧栏 `x=0`、品牌行不换行、时间线无横向溢出——但这仍然是**人工看**，不是断言。
+- **默认只服务本机**。没有鉴权，也没有 TLS；`REPORT_MCP_HOST=0.0.0.0` 可以开到局域网（地址会自动算好打出来，见 §7），但**没有鉴权**这件事不会因为开了局域网而变好——同网段任何设备都能读全部 run 详情。收紧靠 `REPORT_MCP_FILE_ROOTS` 加防火墙，不是靠面板本身。
 - **没有人类 → agent 的回话通道**（by design，见 §9）。
 - **没有外部通知**。人不在面板前时不会被打扰。
 - 面板对超大 run（上万条记录）会一次性全量加载，没有虚拟滚动。
@@ -381,28 +456,32 @@ push → test(5 套件 160 断言) → build(docs:stage + vitepress build) → d
 
 ```bash
 npm install
-npm run build       # tsc → dist/ + 生成 demo bundle
+npm run build       # tsc → dist/，esbuild → public/panel.js，fixtures → demo bundle
 npm start           # 起一个空 run（用于手动连）
-npm test            # 构建 + 造数据 + 起面板 + 五个套件
+npm test            # 构建 + 造数据 + 起面板 + 九个套件
 npm run typecheck   # 只跑 tsc --noEmit
+npm run watch:panel # 改前端时重新打包
 
 # 文档站（独立依赖，见 §11）
 npm --prefix docs install
 npm run docs:dev    # 本地开发服务器
 ```
 
-`npm test` 覆盖 160 条断言，分五套：
+`npm test` 覆盖 362 条断言，分九套：
 
 | 套件 | 验证什么 |
 |---|---|
 | `test/e2e.mjs` | **agent → 人类全链路**：真实 stdio tool 调用 → 进程边界 → 真实面板 DOM，测试全程不碰 JSONL。含两进程共享 `REPORT_MCP_RUN_ID` 交错写（seq 无重号无断档 + 侧栏实时可见）、双写者被 SIGKILL 后重启恢复（历史完好、seq 从 8 续上） |
-| `test/smoke.mjs` | MCP 握手、7 个 tool 逐一调用、seq 连续、HTTP API、404、SSE 推送、**stdout 只有 JSON-RPC** |
-| `test/render.mjs` | jsdom 里真实渲染：侧栏、头部、时间线 13 条记录、成果卡片、筛选、切换 run、XSS 转义、离线降级 |
+| `test/smoke.mjs` | MCP 握手、7 个 tool 逐一调用、seq 连续、HTTP API、404、SSE 推送、**stdout 只有 JSON-RPC**；`/panel.js` 真的被服务端送到 |
+| `test/render.mjs` | jsdom 里真实渲染：侧栏、**项目分组**、头部、时间线 13 条记录、成果卡片、筛选、切换 run、XSS 边界、离线降级；**移动端抽屉的四条开关路径**与窄条同步 |
 | `test/live.mjs` | 带 EventSource shim：**在窗口外直接往 JSONL 追加记录，断言 DOM 在 700ms 内更新**，含状态翻转与筛选 |
 | `test/static.mjs` | **无后端路径**（即 Pages 环境）：探测到没有后端、挂 DEMO 角标、从 demo bundle 渲染 13 条记录与成果卡片、不开 SSE；以及 bundle 缺失时落到空状态 |
 | `test/single.mjs` | **面板单实例**：端口绑定竞选、同 home attach、宿主退出 ~5s 内接管（URL 不变、历史不丢）、异物占用退回私有端口、跨 home 不共享 |
+| `test/lan.mjs` | **局域网暴露**：`0.0.0.0` 绑定后地址真的可达、`/api/health` 发布地址、窄配置 attach 后接管地址、默认绑定仍只有回环、异端口/异协议地址被丢弃 |
+| `test/remote.mjs` | **远端镜像**：miniflare 起真的 workerd（KV + R2），拿真的 mirror 打真的 HTTP；外加一段 spawn 真 server 进程走 stdio 的全链路 |
+| `test/verify-pages.mjs` | **面板作为静态产物**：按 Pages 的方式服务 `public/`（未知路径 404），断言壳与 `panel.js` 一起发布、深链、demo 渲染、资产相对路径 |
 
-部署后另有**线上核验**：`node test/verify-pages.mjs`，对 `<https://adam-ikari.github.io/report-mcp/>` 起 jsdom 断言 44 项（深链、成果卡片、富内容水合、sandbox 帧、筛选、无尾斜杠入口）。它**故意不进 `npm test`**——把发布门禁挂在别人家的 CDN 上，等于给自己装了一个会随机变红的闸机。
+`test/verify-pages.mjs` 的文档站那半要访问已发布站点，所以只在 `PAGES_URL` / `DOCS_URL` 显式给出时才跑；默认只跑本地那半（36 项）。它曾经**只能在部署后跑**，而面板从内联脚本改成 bundle 之后它仍在断言已经不存在于 HTML 里的标记——没人能在不部署的情况下运行它，腐烂就是这么发生的。
 
 ### 目录
 
@@ -411,14 +490,24 @@ src/
   index.ts    入口：起面板 → 建 MCP server → 接 stdio，处理退出清理
   server.ts   7 个 tool 的 zod schema 与 handler
   store.ts    RunWriter(append/seq 同步) + summarize(派生) + 按文件 watch + 面板状态
-  panel.ts    HTTP 路由、SSE、增量 tail、兜底 sweep、单实例仲裁与接管
+  panel.ts    HTTP 路由、SSE、增量 tail、兜底 sweep、单实例仲裁与接管、局域网地址枚举
   types.ts    六种记录的判别联合 + RunSummary
+panel/
+  build.mjs   esbuild 驱动，无配置；--watch 支持
+  src/        main.jsx · app.jsx · components/ · lib/
 public/
-  index.html       面板（单文件，无依赖，live/static 双模式）
-  demo-data.js     生成物，不入库（scripts/build-demo.mjs 产出）
+  index.html   面板的壳：样式表 + #root + <script src=panel.js>
+  panel.js     生成物，**入库**（panel/build.mjs 产出）
+  demo-data.js 生成物，不入库（时间戳相对 Date.now()）
 scripts/
-  build-demo.mjs   从 fixtures 生成 demo bundle，零依赖
-  stage-panel.mjs  把 public/ 暂存进 docs/public/panel/（站点部署用）
+  build-demo.mjs            从 fixtures 生成 demo bundle，零依赖
+  build-worker-assets.mjs   把面板烘进 Worker（生成物，不入库）
+  check-panel-build.mjs     prepare 钩子：只检查 bundle 在，不重建
+  stage-panel.mjs           把 public/ 暂存进 docs/public/panel/（站点部署用）
+worker/
+  wrangler.toml          KV（必须）+ R2（可选）binding
+  src/index.ts           远端面板：/api/* + 自带 index.html 与 panel.js
+Dockerfile / docker-compose.yml   多阶段镜像 + 由 MCP 客户端经 stdio 驱动容器的配置
 docs/               VitePress 文档站（独立 package.json）
   index.md          首页
   guide/            安装与接入、使用方法、面板与 Demo
@@ -427,10 +516,10 @@ docs/               VitePress 文档站（独立 package.json）
 .github/workflows/
   pages.yml        测试门禁 → stage + vitepress build → 部署 Pages
 test/
-  run.mjs          测试编排（起面板、依次跑五套件、清理）
-  harness.mjs      共享测试件：MCP stdio 客户端、EventSource shim、waitFor
+  run.mjs          测试编排（起面板、依次跑七套件、清理）
+  harness.mjs      共享测试件：MCP stdio 客户端、EventSource shim、waitFor、freePort
   fixtures.mjs     三组 fixture，测试与 demo 共用同一来源
   seed.mjs         把 fixtures 写成 JSONL
-  e2e.mjs / smoke.mjs / render.mjs / live.mjs / static.mjs
+  e2e.mjs / smoke.mjs / render.mjs / live.mjs / static.mjs / single.mjs / lan.mjs
   verify-pages.mjs   部署后线上核验（手动，不进 npm test）
 ```

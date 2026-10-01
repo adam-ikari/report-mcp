@@ -113,7 +113,14 @@ try {
   check("GET /api/health", health.ok === true && health.home === HOME, JSON.stringify(health));
 
   const html = await (await fetch(panelUrl + "/")).text();
-  check("GET / serves panel", html.includes("Agent Report") && html.includes("report_progress"), html.length + " bytes");
+  // The shell is HTML + CSS; the panel's code is the bundle it loads.
+  check("GET / serves the panel shell",
+    html.includes("panel.js") && html.includes("Agent Report"), html.length + " bytes");
+  const bundle = await (await fetch(panelUrl + "/panel.js")).text();
+  check("GET /panel.js serves the bundle",
+    bundle.length > 1000 && bundle.includes("report_progress"), bundle.length + " bytes");
+  check("bundle is not inlined into the shell (single-request caching)", !html.includes("report_progress"),
+    "shell is " + html.length + " bytes, bundle is " + bundle.length);
 
   // --- GET /api/file: controlled artifact serving ---
   const F = (q) => fetch(panelUrl + "/api/file?run=" + encodeURIComponent(runId) + "&" + q);

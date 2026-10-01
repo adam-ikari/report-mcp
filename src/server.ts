@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { Store } from "./store.js";
 import type { Panel } from "./panel.js";
+import type { RemoteMirror } from "./remote.js";
 
 const RUN_STATUSES = ["running", "waiting", "blocked", "error", "done", "failed", "aborted"] as const;
 const END_STATUSES = ["done", "failed", "aborted"] as const;
@@ -49,7 +50,16 @@ function fail(error: unknown): ToolResult {
   };
 }
 
-export function createServer(store: Store, getPanelUrl: () => string): McpServer {
+/**
+ * @param mirror Optional remote panel mirror. Records are queued *after* the
+ *   local append succeeds and the tool reply is built, so a mirror can never
+ *   delay or fail a tool call — see src/remote.ts.
+ */
+export function createServer(
+  store: Store,
+  getPanelUrl: () => string,
+  mirror?: RemoteMirror | null,
+): McpServer {
   const server = new McpServer({ name: "report-mcp", version: "0.3.1" });
 
   // A getter, not a string: an attached process is promoted to host at some
@@ -65,6 +75,9 @@ export function createServer(store: Store, getPanelUrl: () => string): McpServer
     try {
       const w = await store.writerFor();
       const rec = await w.append(kind, body);
+      // After the append, outside the critical path: the local JSONL is already
+      // the truth and the caller already has its answer.
+      mirror?.push(rec);
       return ok({
         runId: store.runId,
         seq: rec.seq,
@@ -232,6 +245,7 @@ export function createServer(store: Store, getPanelUrl: () => string): McpServer
         const elapsed = w.elapsedMs();
         if (elapsed !== undefined) body.durationMs = elapsed;
         const rec = await w.append("end", body);
+        mirror?.push(rec);
         return ok({
           runId: store.runId,
           seq: rec.seq,

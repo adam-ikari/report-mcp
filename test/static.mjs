@@ -125,7 +125,12 @@ check("asset file ships with the static site", ares.status === 200 && abytes[0] 
   "bytes=" + abytes.length);
 check("markdown field and md files typeset", scard.querySelectorAll(".md-body").length === 3 &&
   !!scard.querySelector(".md-body strong"));
-check("markdown escapes raw HTML", scard.querySelectorAll(".md-body")[0].textContent.includes("<script>alert(1)</script>"));
+// marked renders raw HTML, so DOMPurify is the XSS boundary for agent markdown.
+// The fixture plants a literal <script>; assert it cannot survive in any form.
+const firstMd = scard.querySelectorAll(".md-body")[0];
+check("markdown sanitised: no script element survives",
+  !firstMd.querySelector("script") && !/onerror|javascript:/i.test(firstMd.innerHTML),
+  JSON.stringify(firstMd.innerHTML.slice(-100)));
 const sframes = scard.querySelectorAll("iframe.arthtml");
 check("html field + html file → sandbox iframes", sframes.length === 2 &&
   [...sframes].every((f) => f.getAttribute("sandbox") === "allow-scripts"), "frames=" + sframes.length);
@@ -134,23 +139,27 @@ check("file iframe got the injected CSP", !!sframes[1] &&
   sframes[1].getAttribute("srcdoc").includes("script-ran"));
 
 console.log("\n--- 我的面板 (panel bookmark book) ---");
-check("我的面板 shown only in static mode", !$("myPanels").classList.contains("hidden"));
+// The input is deliberately uncontrolled (the Add handler reads input.value at
+// click time), so assigning .value here is exactly what a user's typing does.
+const click = (n) => n.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+const q = (sel) => dom.window.document.querySelector(sel);
+check("我的面板 shown only in static mode", !!$("myPanels") && !$("myPanels").classList.contains("hidden"));
 $("mpUrl").value = "http://127.0.0.1:7788";
-$("mpAdd").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-check("saved URL becomes an out-link", !!dom.window.document.querySelector('#mpList a.mp-item[href="http://127.0.0.1:7788"]'));
+click($("mpAdd"));
+check("saved URL becomes an out-link",
+  await waitFor(() => !!q('#mpList a.mp-item[href="http://127.0.0.1:7788"]')));
 check("persisted to localStorage", (dom.window.localStorage.getItem("report-mcp.myPanels") || "").includes("7788"));
 $("mpUrl").value = "javascript:alert(1)";
-$("mpAdd").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+click($("mpAdd"));
 check("non-http URL rejected",
-  !dom.window.document.querySelector('#mpList a[href^="javascript"]') &&
-  $("mpList").textContent.includes("http(s)"));
+  await waitFor(() => !q('#mpList a[href^="javascript"]') && $("mpList").textContent.includes("http(s)")));
 check("only the good URL kept",
   JSON.parse(dom.window.localStorage.getItem("report-mcp.myPanels")).join(",") === "http://127.0.0.1:7788");
 
-[...dom.window.document.querySelectorAll("#filters button")].find((b) => b.textContent === "结果")
-  .dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-check("filter works with no backend", dom.window.document.querySelectorAll(".entry").length === 1,
-  "entries=" + dom.window.document.querySelectorAll(".entry").length);
+[...dom.window.document.querySelectorAll("#filters button")].find((b) => b.textContent === "结果");
+click([...dom.window.document.querySelectorAll("#filters button")].find((b) => b.textContent === "结果"));
+check("filter works with no backend", await waitFor(() => entries() === 1, { timeout: 2000 }),
+  "entries=" + entries());
 dom.window.close();
 
 /* ---------------- static site, demo bundle missing ---------------- */

@@ -1,0 +1,19 @@
+# Build context hygiene: everything the image does NOT need.
+# Keeping this tight matters most for public/ — the build stage regenerates
+# panel.js and demo-data.js, and docs/ and test/ never belong in an image.
+node_modules
+dist
+.git
+.github
+docs
+test
+public/panel.js
+public/panel.js.map
+public/demo-data.js
+public/assets
+.qoder
+*.log
+.DS_Store
+Dockerfile
+docker-compose.yml
+.dockerignore

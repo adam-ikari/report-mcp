@@ -37,9 +37,13 @@ features:
     icon: 🔒
     details: stdio transport 下 stdout 只能有 JSON-RPC，所以所有日志走 stderr。有一条测试专门盯这个。
 
-  - title: 零依赖前端
+  - title: 零配置起步
     icon: 📦
-    details: 面板是单文件 index.html——无构建、无 CDN、无外部字体，打开即用。
+    details: 面板是 React，但没有框架、没有 dev server、没有 CDN——esbuild 打成 public/panel.js 随包发布，打开即用。
+
+  - title: 手机上也能看
+    icon: 📱
+    details: 设一个环境变量把面板开到局域网，地址自动算好打出来；窄屏下面板重排成抽屉 + 窄条布局，不是把桌面版缩小。
 
   - title: 同一份代码，两种形态
     icon: 🔌

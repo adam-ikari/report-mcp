@@ -34,7 +34,12 @@ function fail(error) {
         isError: true,
     };
 }
-export function createServer(store, getPanelUrl) {
+/**
+ * @param mirror Optional remote panel mirror. Records are queued *after* the
+ *   local append succeeds and the tool reply is built, so a mirror can never
+ *   delay or fail a tool call — see src/remote.ts.
+ */
+export function createServer(store, getPanelUrl, mirror) {
     const server = new McpServer({ name: "report-mcp", version: "0.3.1" });
     // A getter, not a string: an attached process is promoted to host at some
     // point mid-session, and tool replies must carry the live URL from then on.
@@ -45,6 +50,9 @@ export function createServer(store, getPanelUrl) {
         try {
             const w = await store.writerFor();
             const rec = await w.append(kind, body);
+            // After the append, outside the critical path: the local JSONL is already
+            // the truth and the caller already has its answer.
+            mirror?.push(rec);
             return ok({
                 runId: store.runId,
                 seq: rec.seq,
@@ -200,6 +208,7 @@ export function createServer(store, getPanelUrl) {
             if (elapsed !== undefined)
                 body.durationMs = elapsed;
             const rec = await w.append("end", body);
+            mirror?.push(rec);
             return ok({
                 runId: store.runId,
                 seq: rec.seq,

@@ -4,15 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 
-import type {
-  EndRecord,
-  LogLevel,
-  ReportRecord,
-  RunStatus,
-  RunSummary,
-  StartRecord,
-} from "./types.js";
-import { EMPTY_LOG_COUNTS } from "./types.js";
+import type { ReportRecord, RunSummary } from "./types.js";
+import { summarize } from "./summarize.js";
+
+// Re-exported so the existing `import { summarize } from "./store.js"` sites
+// (and the panel's equivalence test) keep resolving; the implementation lives in
+// ./summarize.js so the Worker mirror can import it without pulling in node:fs.
+export { summarize };
 
 /** Where runs live. Override with REPORT_MCP_HOME. */
 export function reportHome(): string {
@@ -142,76 +140,6 @@ export class RunWriter {
   elapsedMs(): number | undefined {
     return this.startedAt ? Date.now() - Date.parse(this.startedAt) : undefined;
   }
-}
-
-export function summarize(runId: string, records: ReportRecord[]): RunSummary {
-  const first = records[0];
-  const last = records[records.length - 1];
-
-  const startRecs = records.filter((r): r is StartRecord => r.kind === "start");
-  const start = startRecs[startRecs.length - 1];
-
-  let status: RunStatus = "running";
-  for (const r of records) {
-    if (r.kind === "status") status = r.status;
-    else if (r.kind === "end") status = r.status;
-  }
-
-  const logCounts: Record<LogLevel, number> = { ...EMPTY_LOG_COUNTS };
-  let resultCount = 0;
-  let lastError: string | undefined;
-  let failureSummary: string | undefined;
-  let progress: RunSummary["progress"];
-
-  for (const r of records) {
-    if (r.kind === "log") {
-      logCounts[r.level]++;
-      if (r.level === "error") lastError = r.message;
-    } else if (r.kind === "status" && r.status === "error" && r.message) {
-      lastError = r.message;
-    } else if (r.kind === "result") {
-      resultCount++;
-    } else if (r.kind === "end") {
-      // Keep lastError pointing at the actual error signal; the end summary is
-      // a separate, human-written verdict.
-      if (r.status !== "done" && r.summary) failureSummary = r.summary;
-    } else if (r.kind === "progress") {
-      progress = {
-        phase: r.phase,
-        percent: r.percent ?? null,
-        step: r.step,
-        totalSteps: r.totalSteps,
-        message: r.message,
-      };
-    }
-  }
-
-  const end = last?.kind === "end" ? last : undefined;
-  const startedAt = start?.ts ?? first?.ts;
-  const updatedAt = last?.ts;
-
-  const summary: RunSummary = {
-    runId,
-    title: start?.title ?? "Untitled run",
-    status,
-    startedAt,
-    updatedAt,
-    recordCount: records.length,
-    logCounts,
-    resultCount,
-  };
-  if (start?.agent) summary.agent = start.agent;
-  if (start?.tags) summary.tags = start.tags;
-  if (end) {
-    summary.endedAt = end.ts;
-    if (end.durationMs !== undefined) summary.durationMs = end.durationMs;
-  } else if (startedAt) {
-    summary.durationMs = Math.max(0, Date.parse(updatedAt ?? startedAt) - Date.parse(startedAt));
-  }
-  if (progress) summary.progress = progress;
-  if (lastError) summary.lastError = lastError;
-  if (failureSummary) summary.failureSummary = failureSummary;
-  return summary;
 }
 
 export class Store {
@@ -381,12 +309,21 @@ export class Store {
     })();
   }
 
-  writePanelState(url: string): void {
+  /**
+   * Publish where the panel lives for the human. `urls` is informational — the
+   * single `url` stays the one agents and scripts read; `urls` additionally
+   * carries the LAN addresses when the panel is bound wide.
+   */
+  writePanelState(url: string, urls: string[] = [url]): void {
     try {
       fs.mkdirSync(path.dirname(this.statePath), { recursive: true });
       fs.writeFileSync(
         this.statePath,
-        JSON.stringify({ url, pid: process.pid, runId: this.runId, startedAt: new Date().toISOString() }, null, 2),
+        JSON.stringify(
+          { url, urls, pid: process.pid, runId: this.runId, startedAt: new Date().toISOString() },
+          null,
+          2,
+        ),
         "utf8",
       );
     } catch {

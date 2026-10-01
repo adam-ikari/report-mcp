@@ -1,0 +1,51 @@
+# report-mcp: the MCP server *and* its panel in one container.
+#
+# The MCP client spawns this via stdio, so the container is the "agent process":
+#
+#   {
+#     "mcpServers": {
+#       "report": {
+#         "command": "docker",
+#         "args": ["run", "--rm", "-i",
+#                  "-v", "report-mcp:/data",
+#                  "-e", "REPORT_MCP_HOST=0.0.0.0",
+#                  "report-mcp:latest"]
+#       }
+#     }
+#   }
+#
+# -i is mandatory: without it the container gets no stdin and the MCP transport
+# has nothing to speak to. --rm keeps the host free of stopped containers.
+#
+# The volume is the whole point. REPORT_MCP_HOME is the storage root; mount it
+# and the runs survive `docker rm`, and `docker run` again picks the history back
+# up. Mount a host directory instead if you want to read the JSONL directly.
+services:
+  report-mcp:
+    build: .
+    image: report-mcp:latest
+    container_name: report-mcp
+    # -i keeps stdin open for the MCP client; -t is deliberately NOT set, it
+    # would make the stdio transport non-binary-clean.
+    stdin_open: true
+    ports:
+      # The panel, reachable from the LAN. Bind it to 127.0.0.1:7788 on the host
+      # instead if you only want local access.
+      - "7788:7788"
+    environment:
+      REPORT_MCP_HOST: 0.0.0.0
+      REPORT_MCP_PORT: "7788"
+      # Narrow /api/file to directories you are willing to serve to the LAN.
+      # Unset means any image/markdown/html file an agent reports is fetchable
+      # by anyone who can reach the port.
+      REPORT_MCP_FILE_ROOTS: "/data"
+    volumes:
+      - report-mcp:/data
+    # The image runs as `node` (uid 1000). A named volume is created root-owned,
+    # so give it to the right uid on first run:
+    #   docker volume create report-mcp
+    #   docker run --rm -v report-mcp:/data alpine chown -R 1000:1000 /data
+    restart: unless-stopped
+
+volumes:
+  report-mcp:

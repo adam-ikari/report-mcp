@@ -15,6 +15,7 @@
  * print and how they exit, and a shared reporter buys nothing.
  */
 import { spawn } from "node:child_process";
+import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,6 +23,24 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export const SERVER = path.join(here, "..", "dist", "index.js");
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Ask the OS for a port nobody holds, then get out of its way fast.
+ *
+ * Suites that need their own listener use this instead of a hardcoded port:
+ * 7788 is the shared production default, and a real agent session on this
+ * machine may legitimately hold it while tests run.
+ */
+export function freePort() {
+  return new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.on("error", reject);
+    s.listen(0, "127.0.0.1", () => {
+      const p = s.address().port;
+      s.close(() => resolve(p));
+    });
+  });
+}
 
 /**
  * Poll `cond` until it is truthy (or the timeout).
@@ -127,7 +146,7 @@ export async function connectMcp(env, { serverPath = SERVER, timeout = 15000 } =
   let nextId = 1;
   const pending = new Map();
   const notifications = [];
-  const meta = { panelUrl: null, runId: null, storage: null };
+  const meta = { panelUrl: null, runId: null, storage: null, lanUrls: [] };
 
   proc.stdout.on("data", (d) => {
     stdoutBuf += d.toString();
@@ -159,6 +178,11 @@ export async function connectMcp(env, { serverPath = SERVER, timeout = 15000 } =
     let m;
     if (!meta.panelUrl && (m = /\[report-mcp\] panel\s+(\S+)/.exec(stderrBuf))) {
       meta.panelUrl = m[1].replace(/\/#.*$/, "");
+    }
+    // Each extra address a wildcard bind is reachable on gets its own `lan` line.
+    for (const m of stderrBuf.matchAll(/\[report-mcp\] lan\s+(\S+)/g)) {
+      const u = m[1].replace(/\/#.*$/, "");
+      if (!meta.lanUrls.includes(u)) meta.lanUrls.push(u);
     }
     if (!meta.runId && (m = /\[report-mcp\] run id\s+(\S+)/.exec(stderrBuf))) meta.runId = m[1];
     if (!meta.storage && (m = /\[report-mcp\] storage\s+(\S+)/.exec(stderrBuf))) meta.storage = m[1];
@@ -231,6 +255,10 @@ export async function connectMcp(env, { serverPath = SERVER, timeout = 15000 } =
     },
     get storage() {
       return meta.storage;
+    },
+    /** Extra addresses the panel advertised on its `lan` boot lines. */
+    get lanUrls() {
+      return [...meta.lanUrls];
     },
     get stderr() {
       return stderrBuf;

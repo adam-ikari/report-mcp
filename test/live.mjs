@@ -26,6 +26,9 @@ const nodeFetch = createFetcher(ORIGIN);
 const dom = new JSDOM(html, {
   url: `${ORIGIN}/#/run/${RUN}`,
   runScripts: "dangerously",
+  // Required since the panel became an external bundle: without it jsdom does
+  // not fetch panel.js and the timeline never renders at all.
+  resources: "usable",
   pretendToBeVisual: true,
   virtualConsole: vc,
   beforeParse(window) {
@@ -117,10 +120,12 @@ check("sidebar status updated", await waitFor(() => window.document.querySelecto
 console.log("\nfinal: entries=" + entries() + " meta=" + $("rMeta").textContent);
 
 // --- filter still works against live-appended records ---
+// React re-renders after the handler returns, so wait for the filtered count
+// rather than reading the DOM synchronously.
 [...window.document.querySelectorAll("#filters button")].find((b) => b.textContent === "日志")
   .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("log filter sees live log", window.document.querySelectorAll(".entry").length === 2,
-  "entries=" + window.document.querySelectorAll(".entry").length);
+check("log filter sees live log", await waitFor(() => entries() === 2, { timeout: 2000 }),
+  "entries=" + entries());
 
 dom.window.close();
 const failed = results.filter((x) => !x).length;

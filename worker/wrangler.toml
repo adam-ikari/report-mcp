@@ -1,0 +1,36 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "report-mcp-mirror"
+main = "src/index.ts"
+# Kept in step with the compatibility date test/remote.mjs pins: miniflare boots a real
+# workerd, and a date that binary does not know is a hard startup failure.
+compatibility_date = "2026-08-06"
+# The Worker serves the panel itself — index.html and panel.js are baked in by
+# scripts/build-worker-assets.mjs — instead of using a static-assets binding.
+#
+# That is deliberate, not an oversight. With `assets = { binding }`, Miniflare 4
+# answers an asset miss with its own 404 and never invokes the Worker, so every
+# /api route and the token-gated shell are unreachable under test while working
+# in production. Serving the files from the Worker keeps one code path, and
+# test/remote.mjs runs that exact path under workerd.
+
+# Raw records per run, one key per run. Summaries are recomputed on read, never
+# stored — see src/index.ts.
+[[kv_namespaces]]
+binding = "REPORTS"
+# Replace with the id from `npx wrangler kv namespace create REPORTS`.
+id = "REPLACE_ME"
+
+# Optional. Artifact bytes for the panel's inline-render path. Without it,
+# artifacts degrade to plain links, which the panel already handles.
+# [[r2_buckets]]
+# binding = "ARTIFACTS"
+# bucket_name = "report-mcp-artifacts"
+
+[vars]
+# Shown in the panel's storage line so a remote mirror is never mistaken for the
+# local panel.
+MIRROR_LABEL = "report-mcp mirror (Cloudflare Worker)"
+
+# TOKEN is a secret, not a var — never commit it:
+#   npx wrangler secret put TOKEN
+# Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"

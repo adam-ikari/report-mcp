@@ -25,16 +25,17 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      # dist/ is committed so git installs work without devDependencies (a
-      # global install never gets `tsc`). tsc output is deterministic, so any
-      # drift means src/ changed without a rebuild — fail rather than ship a
-      # package whose bin runs yesterday's code.
-      - name: Committed dist/ must match src/
+      # dist/ and public/panel.js are committed so git installs work without
+      # devDependencies (a global install never gets `tsc` or esbuild). Both
+      # builds are deterministic, so any drift means the source changed without
+      # a rebuild — fail rather than ship a package whose bin runs yesterday's
+      # code, or whose panel is missing.
+      - name: Committed build output must match its source
         run: |
-          if [ -n "$(git status --porcelain -- dist)" ]; then
-            echo "::error::dist/ is out of sync with src/. Run 'npm run build' and commit it."
-            git status --porcelain -- dist
-            git diff -- dist
+          if [ -n "$(git status --porcelain -- dist public/panel.js public/panel.js.map)" ]; then
+            echo "::error::dist/ or public/panel.js is out of sync with src/ or panel/src. Run 'npm run build' and commit it."
+            git status --porcelain -- dist public/panel.js public/panel.js.map
+            git diff -- dist public/panel.js public/panel.js.map
             exit 1
           fi
 
