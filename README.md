@@ -395,7 +395,7 @@ report-mcp --version    # report-mcp 0.3.1
 已知局限：
 
 - **并发 append 无锁**。`seq` 重同步靠「append 前比对文件大小」，这是 check-then-act 而非原子操作：两个进程**真正同时**落到同一个窗口仍可能撞号。`test/e2e.mjs` 覆盖的是**交错**写入——agent 逐条 await tool 调用，即实际使用节奏——证明这种情况无重号无断档；真并发不在保证范围内。一次 MCP 连接对应一个 run，`REPORT_MCP_RUN_ID` 共享时建议低频写入。
-- **面板只在 jsdom 里验证过**。没有起真实 Chromium：布局/CSS、浏览器原生 `EventSource` 的重连行为、多标签一致性都没测。数据流和 DOM 结构是测住的，视觉与浏览器差异不是。窄屏布局是手工用 headless Chromium 把面板塞进 390×780 / 320×640 的 iframe 里看过的（iframe 内的 media query 跟着 frame 的盒子走），抽屉能开、侧栏 `x=0`、品牌行不换行、时间线无横向溢出——但这仍然是**人工看**，不是断言。
+- **数据流与 DOM 结构在 jsdom 里测住，布局在真浏览器里测住，两者不重叠。** 其余套件跑在 jsdom 上，而 jsdom 不求值 `@media`，所以窄屏布局另有 `test/mobile.mjs`：headless Chromium + DevTools 协议，在五个视口上断言真实布局（无 Chromium 时跳过，`CHROME_PATH` 可指定）。**仍未覆盖**的是浏览器原生 `EventSource` 的重连行为、多标签一致性，以及 iOS Safari 实机——Chromium 的布局结论不能直接搬到 Safari 上，`env(safe-area-inset-*)` 和 `-webkit-overflow-scrolling` 的实际表现尤其需要真机确认。
 - **默认只服务本机**。没有鉴权，也没有 TLS；`REPORT_MCP_HOST=0.0.0.0` 可以开到局域网（地址会自动算好打出来，见 §7），但**没有鉴权**这件事不会因为开了局域网而变好——同网段任何设备都能读全部 run 详情。收紧靠 `REPORT_MCP_FILE_ROOTS` 加防火墙，不是靠面板本身。
 - **没有人类 → agent 的回话通道**（by design，见 §9）。
 - **没有外部通知**。人不在面板前时不会被打扰。

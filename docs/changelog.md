@@ -42,7 +42,12 @@ npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp
 
 ### 手机
 
-- **窄屏重排，不是把桌面版缩小。** run 列表变成左上角 ☰ 唤出的抽屉（点遮罩 / `Esc` / 选中 run 都收起），顶部窄条承载「当前 run 标题 + 状态 chip」，筛选按钮横向滚动而非换行堆三排，按钮加高到 ~38px，高度改用 `100dvh` 并避开 `env(safe-area-inset-*)`，另加 `overscroll-behavior: none` 与 `-webkit-text-size-adjust: 100%`
+- **窄屏重排，不是把桌面版缩小。** run 列表变成左上角 ☰ 唤出的抽屉（点遮罩 / `Esc` / 选中 run 都收起），顶部窄条承载「当前 run 标题 + 状态 chip」，高度改用 `100dvh` 并避开 `env(safe-area-inset-*)`，另加 `overscroll-behavior` 与 `-webkit-text-size-adjust: 100%`
+- **44px 点击区，按实测补齐。** 按钮、`summary`、`run-item`、分组表头、书签删除按钮全部抬到 ≥44px，`<input>` 用 16px 字号（小于 16px 会让 iOS Safari 聚焦时把整页放大），并统一 `touch-action: manipulation` 去掉 300ms 延迟
+- **工具栏分两行，因为一行放不下。** 五个筛选 + 两个操作按钮实测 490px，手机只有 320–430px。原先靠横向滚动，于是「自动滚动」「复制链接」整个落在屏幕外、且没有任何提示——一个能用的按钮就此变成死的。现在筛选独占一行可横滑，两个操作平分下一行，始终可见；`561px` 以上恢复单行（横屏手机有宽度、缺高度，分两行要白搭 ~50px）
+- **头部 meta 改成可横滑单行。** 它在 320px 上会折成四行（104px）、横屏手机上折三行（57px），是整个头部最贵也最不重要的部分。现在报告本身在首屏之上，全部字段都还在
+- **补齐 GFM 表格样式。** 上一版放开了表格渲染，面板却没有表格样式；`display:block` + `max-width:100%` + `overflow-x:auto` 让表格自己横滑而不是把整页撑破
+- **横屏（`max-height: 520px`）单独收紧固定 chrome。** 手机横过来只有 360px 高，窄条 + 头部 + 工具栏一度吃掉 81%，时间线只剩 19%。收紧 padding 与字号、标题与 meta 合并成一行后回到 54%；**只收紧留白，绝不缩点击区**——缩小汉堡键省 6px 是错的交易，漏这一次等于丢掉整个侧栏
 - **抽屉状态走 `#app.nav-open` class，JS 不判断视口宽度**——样式表只在窄屏 media query 里认它，桌面端是死的；顺带避开了 jsdom 没有的 `matchMedia`，抽屉逻辑因此可测
 - **「复制链接」加 `execCommand` 兜底**：`navigator.clipboard` 只在安全上下文可用，局域网上的 `http://192.168.x.x` 恰恰不是，不兜底的话这个按钮在手机上永远失败
 
@@ -63,6 +68,10 @@ npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp
 
 ### 测试
 
+- **新增 `test/mobile.mjs`（80 项）：用真浏览器量布局。** 其余套件都在 jsdom 里渲染面板，而 jsdom 不求值 `@media`——视口多窄，`getComputedStyle` 给的都是桌面级联。窄屏规则此前只有「人工看截图」这一道验证，这个套件是替代品：headless Chromium + DevTools 协议，在 320×640 / 390×800 / 430×800 / 740×360（横屏）/ 768×1024 五个视口上断言真实布局。无 Chromium 时干净跳过而不是失败（`CHROME_PATH` 可指定）
+- 它当场抓出四个真问题，全都是「手工看过」放过的：`.mp-del`（唯一会删东西的按钮）只有 29×16px——demo 没有书签，按钮压根没渲染，所以之前每一道检查都量不到它；`summary { display: flex }`（本意是把折叠行加高到可点）**顺手删掉了展开三角**，因为 marker 只在 `display: list-item` 下生成，行长到 44px 而看上去完全不可展开；`.head .meta` 在 292px 的手机里塞了 947px 内容，滚动条藏了、渐变也没有，正是这次改动想消灭的那种死角；`td` 上的 `nowrap` 把一句话变成 277px 窗口里的 588px 单元格，读一句要横滑三屏（**表格本身没破**，`display:block` 那套撑住了，错的只是阅读成本）
+- 前两条之所以漏掉，是因为早先的探测跑在一个**根本不渲染涉事元素的 fixture 状态**下。所以这个套件在 boot 前先写 `localStorage` 造出书签，并断言真实 run 产生的那条最长 meta 行
+- 套件还纠正了我自己的注释：`.toolbar .seg` 在 320px 上实测 294px 的按钮挤在 292px 的行里，`状态` 少了一截——注释里写的「每个手机宽度都放得下」当时是假的，于是加了 `max-width: 340px` 的 2px padding 补齐，而不是把断言放宽
 - **`test/verify-pages.mjs` 的本地那半进了 `npm test`（36 项）。** 它此前**只能在部署后运行**；面板从内联脚本改成 bundle 之后它仍在断言已不存在于 HTML 里的标记（`html.includes("modeChip")`），而没人能在不部署的情况下执行它，那条断言就烂在仓库里。现在按 Pages 的方式本地服务 `public/`（未知路径 404，让面板走静态分支），断言壳与 `panel.js` 一起发布、深链、demo 渲染、资产相对路径。文档站那半仍需网络，`PAGES_URL` / `DOCS_URL` 显式给出时才跑
 - 修掉那条腐烂断言的同时，把脚本里三处「固定 sleep + 同步读 DOM」换成等状态——React 批处理下它们本来也过不了
 - 新增 `test/lan.mjs`（19 项）：宽绑定、地址真的可达、health 发布、窄配置 attach 后接管地址、默认绑定仍只有回环、异端口/异协议地址被丢弃
@@ -70,7 +79,7 @@ npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp
 - `render.mjs` / `live.mjs` / `e2e.mjs` 补 `resources: "usable"`：面板成了外部 bundle，不加这个 jsdom 不会去取它，DOM 会是空的
 - **`freePort()` 提到 `test/harness.mjs`**，`single.mjs` 与 `lan.mjs` 共用
 - **新增 `test/remote.mjs`（50 项）**，用 miniflare 起**真的 workerd**（带 KV 和 R2 binding），拿真的 mirror 打真的 HTTP：鉴权四道门、round trip、summary 由记录重算、重试幂等、乱序到达、垃圾输入被过滤、`(run, seq, i)` 穿越被拒、SSE 帧格式、制品默认不上传而 opt-in 后可读、死掉的 mirror 不影响 tool call、队列有界、半配置不启用。最后一段 spawn 真的 server 进程走 stdio 调 tool，靠正常 shutdown flush 验证全链路，并断言本地 JSONL 一条没少
-- 断言总数 258 → 362，套件 7 → 9
+- 断言总数 258 → 442（其中 80 项来自 `mobile.mjs`，需 Chromium，不在 `npm test` 内），套件 7 → 10
 
 
 ## v0.3.1 · 2026-09-29

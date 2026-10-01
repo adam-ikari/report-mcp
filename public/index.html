@@ -21,6 +21,14 @@
     --red: #ff5630;
     --purple: #b57aff;
     --gray: #6b7684;
+    /*
+     * Safe-area padding, once. env() resolves to 0 on anything without a notch
+     * (and needs viewport-fit=cover, which the meta tag sets), so max() is
+     * enough — no media query needed to know whether the device has a cutout.
+     */
+    --pad-l: max(14px, env(safe-area-inset-left));
+    --pad-r: max(14px, env(safe-area-inset-right));
+    --pad-b: env(safe-area-inset-bottom);
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
@@ -208,6 +216,21 @@
   .md-body code { background: #0b0f14; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
   .md-body pre.mdcode { margin: 9px 0; padding: 10px 12px; background: #0b0f14; border: 1px solid var(--line); border-radius: 7px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; color: #b9c5d4; }
   .md-body pre.mdcode code { background: none; border: 0; padding: 0; }
+  /* GFM tables. `display: block` + `overflow-x: auto` is the whole trick: a table
+     is the one markdown element with no natural line breaks, so without it a
+     five-column table blows out the page width on a phone. The wrapper scrolls;
+     the page does not. */
+  .md-body table {
+    display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    border-collapse: collapse; margin: 10px 0; font-size: 13px;
+  }
+  .md-body th, .md-body td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+  /* nowrap on the header only. On the body it turned one prose sentence into a
+     588px cell inside a 277px window — roughly three screen-widths of sideways
+     scrolling to read it. Let cells wrap and the table stays as wide as it needs. */
+  .md-body th { white-space: nowrap; }
+  .md-body th { background: #101820; font-weight: 600; }
+  .md-body tbody tr:nth-child(even) { background: rgba(255,255,255,.015); }
 
   .empty { margin: auto; text-align: center; color: var(--muted); padding: 40px; max-width: 620px; }
   .empty h3 { color: var(--text); margin: 0 0 10px; }
@@ -270,7 +293,8 @@
 
     .mobar {
       display: flex; align-items: center; gap: 10px; min-width: 0;
-      padding: 8px 12px; padding-top: calc(8px + env(safe-area-inset-top));
+      padding: 8px var(--pad-r) 8px var(--pad-l);
+      padding-top: calc(8px + env(safe-area-inset-top));
       background: var(--panel); border-bottom: 1px solid var(--line);
     }
     .mobar .mo-title {
@@ -279,45 +303,189 @@
     }
     .iconbtn {
       flex: none; display: inline-flex; align-items: center; justify-content: center;
-      width: 40px; height: 40px; padding: 0;
-      background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+      width: 44px; height: 44px; padding: 0;
+      background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
       color: var(--text); cursor: pointer;
     }
     .iconbtn:active { background: #232b36; }
-    .iconbtn svg { width: 19px; height: 19px; display: block; }
+    .iconbtn svg { width: 20px; height: 20px; display: block; }
 
     /* The detail view is now a sibling of the bar, not the whole column. */
     #detail { flex: 1 1 auto; height: auto; }
-    .head { padding: 14px 14px 12px; }
+    .head { padding: 14px var(--pad-r) 12px var(--pad-l); }
     .head h2 { font-size: 16px; }
-    .head .meta { gap: 10px 14px; }
-
-    /* Filters scroll sideways instead of wrapping into three stacked rows. */
-    .toolbar {
-      flex-wrap: nowrap; overflow-x: auto; gap: 6px;
-      padding: 8px 12px; padding-right: max(12px, env(safe-area-inset-right));
+    /*
+     * The meta line is the most expensive thing in the header, and it is also
+     * the least important: it wrapped to four lines at 320px and to three in a
+     * 360px-tall landscape phone, costing 104px and 57px of a viewport that had
+     * none to spare. On a phone it becomes one line you can swipe, so the report
+     * itself starts above the fold instead of below it. Every field stays.
+     */
+    .head .meta {
+      flex-wrap: nowrap; overflow-x: auto; gap: 14px;
       scrollbar-width: none; -webkit-overflow-scrolling: touch;
+      /* Unlike the toolbar filters, this one really does overflow: a finished run
+         with tags, warn/error counts and a failure summary measured 947px of
+         content in a 292px box. Hiding the scrollbar with no fade would leave
+         `最后错误 …` silently off-screen, which is the exact dead-end this
+         change set out to remove. The fade is the affordance. */
+      -webkit-mask-image: linear-gradient(90deg, #000 84%, transparent);
+      mask-image: linear-gradient(90deg, #000 84%, transparent);
     }
-    .toolbar::-webkit-scrollbar { display: none; }
-    .toolbar .spacer, .toolbar .seg { display: contents; }
-    .toolbar .btn { flex: none; min-height: 38px; padding: 8px 13px; font-size: 13px; }
+    .head .meta::-webkit-scrollbar { display: none; }
+    .head .meta > * { flex: none; }
+
+    /*
+     * Toolbar. Two rows, not one scrolling row: five filters plus two actions
+     * is 490px of buttons, and a phone is 320–430px wide. Scrolling one row hid
+     * 自动滚动 and 复制链接 off-screen with nothing to suggest they were there,
+     * which is how a working button becomes a dead one. So the filters get their
+     * own horizontally-scrolling line and the two actions share the next one.
+     */
+    .toolbar {
+      flex-wrap: wrap; gap: 6px;
+      padding: 8px var(--pad-r) 8px var(--pad-l);
+    }
+    .toolbar .spacer { display: none; }
+    .toolbar .seg {
+      flex: 1 1 100%; min-width: 0; display: flex; gap: 6px;
+      /* Overflow stays possible — a longer filter label in another locale must
+         not push the actions off the row — but the five filters fit at every
+         phone width (measured 294px of buttons in 292px at 320px, and the
+         narrow-width rule below closes that 2px), so no scroll affordance is
+         needed here. A fade would dim 状态 for nothing. */
+      overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+    }
+    .toolbar .seg::-webkit-scrollbar { display: none; }
+    /* 320px: the five filters are 294px and the row is 292px, so 状态 was losing
+       its right edge. Two pixels of padding buys the fit back. */
+    @media (max-width: 340px) {
+      .toolbar .seg .btn { padding: 8px 12px; }
+    }
+    .toolbar .btn {
+      flex: 1 1 auto; min-height: 44px; padding: 8px 13px; font-size: 13px;
+      touch-action: manipulation;
+    }
+    .toolbar .seg .btn { flex: 0 0 auto; }
 
     .timeline {
-      padding: 14px 12px 72px;
-      padding-left: max(12px, env(safe-area-inset-left));
-      padding-right: max(12px, env(safe-area-inset-right));
+      padding: 14px var(--pad-r) calc(56px + var(--pad-b)) var(--pad-l);
+      /* Stop a fling at the end of the timeline from chaining into the page. */
+      overscroll-behavior: contain;
     }
     .entry { grid-template-columns: 1fr; gap: 3px; padding: 11px 0; }
     .entry .when { text-align: left; }
-    .run-item { padding: 12px 10px; }
+    .run-item { padding: 12px 10px; touch-action: manipulation; }
     .result-card { padding: 12px 13px; }
     .arthtml { min-height: 320px; }
     .empty { padding: 24px 16px; }
-    pre { max-height: 50vh; }
+    /* Generous, not uncapped: a scrollable code block inside a scrollable
+       timeline is the worst kind of nested scroll on a phone, but an uncapped
+       500-line dump makes the page unusable. */
+    pre { max-height: 60vh; -webkit-overflow-scrolling: touch; }
     /* One-line brand row: at 320px the title, chip and count must not wrap. */
     .brand { padding: 12px; }
     .brand h1 { overflow: hidden; text-overflow: ellipsis; }
     #runCount { white-space: nowrap; }
+
+    /*
+     * Tap targets. 44px is the guideline, and a thumb is worse than a cursor:
+     * 38px buttons and 19px <summary> rows measured short at every width, which
+     * is how "details" quietly stops being discoverable on a phone.
+     */
+    .btn, .iconbtn, .run-item, .rgroup-head, summary, .mp-del, #myPanels input, .mp-add .btn {
+      touch-action: manipulation;
+    }
+    .btn { min-height: 44px; }
+    /*
+     * The disclosure triangle is a 12px glyph; the row around it is the target.
+     * Height comes from padding, NOT from `display: flex` — a marker only
+     * generates for `display: list-item`, so flexing the summary silently
+     * deletes the triangle and the collapsed payload becomes indistinguishable
+     * from a line of text. (Measured: the label sat 0px from the box edge with
+     * flex, against a ~15px marker inset natively.)
+     */
+    details { margin-top: 7px; }
+    details > summary {
+      min-height: 44px; padding: 12px 0; font-size: 12.5px; line-height: 1.4;
+    }
+    details > summary::marker { color: var(--muted); }
+    #myPanels input {
+      min-height: 44px; font-size: 16px; /* < 16px makes iOS Safari zoom the page on focus */
+    }
+    #myPanels .mp-add .btn { flex: none; }
+    .mp-item { min-height: 44px; }
+    /* Was `padding: 0 10px; line-height: 1`, i.e. a 16px-tall target on the one
+       button in the panel that destroys something. */
+    .mp-del {
+      min-width: 44px; min-height: 44px; padding: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 18px; line-height: 1;
+    }
+    .rgroup-head { min-height: 44px; }
+
+    /* Reading, not just fitting: 13.5px on a phone is small at arm's length. */
+    .md-body { font-size: 15px; line-height: 1.65; }
+    .md-body p { margin: 9px 0; }
+    .md-body pre.mdcode { font-size: 12.5px; line-height: 1.5; }
+    .md-body code { font-size: 13px; }
+    .md-body table { font-size: 13.5px; }
+    .sub { font-size: 13px; }
+    .result-card .sum { font-size: 14.5px; }
+    .entry .when { font-size: 11.5px; }
+    .links a, ul.art li { font-size: 13.5px; }
+  }
+
+  /*
+   * Once there is room for all seven buttons again (≈490px of them), put the
+   * toolbar back on one line. The two-row layout above is a portrait-phone
+   * necessity, not a preference: in landscape it costs ~50px of a 360px-tall
+   * screen that the timeline needed more.
+   */
+  @media (min-width: 561px) and (max-width: 860px) {
+    .toolbar { flex-wrap: nowrap; }
+    .toolbar .seg { flex: 0 1 auto; overflow-x: visible; }
+    .toolbar .btn { flex: 0 0 auto; }
+    /* Push the two actions to the right edge, now that there is slack. */
+    .toolbar #followBtn { margin-left: auto; }
+  }
+
+  /*
+   * Short viewports — a landscape phone is 360px tall, and the fixed chrome
+   * (bar + header + toolbar) is what stands between the reader and the report.
+   * Tighten the header rather than hide the facts: the meta line keeps every
+   * field, it just gets denser, and the progress bar gives up 3px nobody can see.
+   */
+  @media (max-height: 520px) {
+    /*
+     * Padding and type only — never the target size. Shrinking the hamburger to
+     * 38px to save 6px was the wrong trade: it is the one control that opens the
+     * run list, and a miss there costs the user the whole sidebar. The 44px box
+     * stays; the padding around it gives.
+     */
+    .mobar {
+      padding-top: calc(2px + env(safe-area-inset-top));
+      padding-bottom: 2px;
+    }
+    .head { padding-top: 8px; padding-bottom: 7px; }
+    .head .meta { font-size: 11.5px; margin-top: 3px; }
+    .progress-wrap { margin-top: 6px; }
+    .progress-wrap .progress { height: 4px; }
+    .toolbar { padding-top: 4px; padding-bottom: 4px; }
+  }
+
+  /*
+   * Wide *and* short — a landscape phone. Here the width is there and the height
+   * is not, so spend width to buy height: the title row and the meta line share
+   * one line instead of stacking, which is worth ~21px of a 360px viewport, and
+   * it costs nothing because at 561px+ there was slack in that row anyway.
+   */
+  @media (min-width: 561px) and (max-height: 520px) {
+    .head { display: flex; flex-wrap: wrap; align-items: center; column-gap: 14px; }
+    .head .row { flex: 0 1 auto; min-width: 0; }
+    .head h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .head .meta { flex: 1 1 200px; margin-top: 0; }
+    .progress-wrap { flex: 1 1 100%; }
   }
 </style>
 </head>

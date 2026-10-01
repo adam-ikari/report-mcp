@@ -39,7 +39,10 @@
 ## 局限
 
 - **并发 append 无锁。** `seq` 重同步靠「append 前比对文件大小」，这是 check-then-act 而非原子操作：两个进程**真正同时**落到同一个窗口仍可能撞号。`test/e2e.mjs` 覆盖的是**交错**写入——agent 逐条 await tool 调用，即实际使用节奏——证明这种情况无重号无断档；真并发不在保证范围内。一次 MCP 连接对应一个 run，`REPORT_MCP_RUN_ID` 共享时建议低频写入。
-- **面板只在 jsdom 里验证过。** 没有起真实 Chromium：布局/CSS、浏览器原生 `EventSource` 的重连行为、多标签一致性都没测。数据流和 DOM 结构是测住的，视觉与浏览器差异不是。窄屏布局额外做了人工核验（把面板塞进 390×800 / 320×640 的 `iframe` 用 headless Chromium 看），但那仍然是**人工看**，不是断言。React 迁移后这套断言还多了一层依赖：`resources: "usable"` 不加，jsdom 不会去取 `panel.js`，所有断言会以「expected 13 entries, got 0」的形式失败，看不出真因。
+- **数据流与 DOM 结构在 jsdom 里测住，布局在真浏览器里测住，两者不重叠。** 其余套件跑在 jsdom 上，而 jsdom 不求值 `@media`——视口多窄，`getComputedStyle` 给的都是桌面级联，窄屏规则在那一层根本求值不到。布局因此交给 `test/mobile.mjs`：headless Chromium + DevTools 协议，把面板塞进 `iframe`（`iframe` 内的 media query 跟着 frame 的盒子走），在 320×640 / 390×800 / 430×800 / 740×360 / 768×1024 上断言真实布局。无 Chromium 时干净跳过。
+  - 这套断言抓出的问题里有一个共同的教训：**手工看截图会漏掉「元素压根没渲染」**。`.mp-del`（唯一会删东西的按钮）只有 29×16px，但 demo 数据里没有书签，按钮不存在，于是每一道检查都量不到它。所以 `mobile.mjs` 在 boot 前先写 `localStorage` 造出书签，并且断言真实 run 产生的那条最长 meta 行，而不是拿一个退化状态凑合。
+  - React 迁移后 jsdom 那一侧还多了一层依赖：`resources: "usable"` 不加，jsdom 不会去取 `panel.js`，所有断言会以「expected 13 entries, got 0」的形式失败，看不出真因。
+- **iOS Safari 实机未验证。** Chromium 的布局结论不能直接搬过去，`env(safe-area-inset-*)`、`-webkit-overflow-scrolling`、`100dvh` 在地址栏收起时的实际表现都需要真机确认。
 - **agent markdown 的 XSS 防线是别人的库。** DOMPurify 的 allowlist 由我们配置、由它执行，配置本身就是攻击面。`marked` 透传原始 HTML 这件事不会变，所以第二道工序不能省。
 - **共享面板跟着 agent 会话生灭。** 面板由第一个抢到 `7788` 的 report-mcp 进程托管，没有独立的常驻 `serve` 命令：所有宿主会话都退出后面板就没了（数据仍在磁盘，`tail -f` 可看）。宿主退出时 attach 中的进程有 **~5s 接管窗口**，期间链接短暂不可达。
 - **`7788` 被无关程序占用时共享退化。** 健康探测（`/api/health` + 同 `home` 校验）不通过，各进程退回随机端口开私有面板——可用，但「一块屏」没了。自定义 `REPORT_MCP_PORT` 同理：只有共用同一个端口的进程之间才谈共享。

@@ -56,6 +56,15 @@ export function buildRuns() {
         status: "done",
         markdown:
           "### 评分口径\n\n- 可审计性**权重最高**（0.4）\n- 实时性次之\n\n> 混合方案：Web 面板 + JSONL 落盘\n\n" +
+          "| 通道 | 可审计 | 实时 | 上手成本 | 适合无人值守 |\n" +
+          "|---|---|---|---|---|\n" +
+          "| stdio 直写 | 低 | 高 | 低 | 是 |\n" +
+          "| 结构化日志 | 中 | 中 | 中 | 是 |\n" +
+          "| Web 面板 | 高 | 高 | 中 | 是 |\n" +
+          "| 通知推送 | 低 | 高 | 高 | 否 |\n" +
+          "| 混合方案 | 高 | 高 | 中 | 是 |\n\n" +
+          "这张表故意有五列：验证窄屏上表格自己横滑，而不是把整页撑破；" +
+          "单元格里的文字则必须换行，不能为了塞下而让一句话横滑三屏。\n\n" +
           "<script>alert(1)</script>",
         html:
           '<div style="font:14px system-ui;box-sizing:border-box;min-height:100vh;padding:24px 28px;background:#0e1116;color:#dce3ec;display:flex;flex-direction:column;justify-content:space-evenly">' +
