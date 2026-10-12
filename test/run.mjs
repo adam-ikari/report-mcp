@@ -2,36 +2,35 @@
 /**
  * Test orchestrator.
  *
- *   npm test          build + seed fixtures + start a panel + run all suites
+ *   npm test    build, then run every suite
  *
- * Suites, in order (render must run before live mutates a fixture run):
- *   e2e.mjs    tool call → process boundary → panel DOM, incl. two writers
- *              sharing one run and a SIGKILL/restart. Own home and ports.
- *   smoke.mjs  MCP stdio handshake, every tool, HTTP API, SSE delivery, stdout purity
- *   render.mjs panel rendering in jsdom: sidebar, header, timeline, filters,
- *              switching, and the mobile drawer / top bar
- *   live.mjs   append records to the JSONL out-of-band and assert the DOM updates live
- *   verify-pages.mjs  the panel as a static host serves it (local half; docs half opt-in)
+ * Each suite owns its temp home and its own port; nothing is shared between them,
+ * so a red points at one process and not at somebody else's leftover state. There is
+ * no seeded fixture and no long-lived panel to boot first: the pipeline under test is
+ * a child process per render and a host that reads journals, so the suites start both
+ * themselves.
+ *
+ *   vendor.mjs        the vendored renderer is the file the manifest pins
+ *   am-smoke.mjs      the CLI contract src/render.ts assumes, against am directly
+ *   render-error.mjs  a bad draft: am's error text survives, the journal keeps the draft
+ *   milestone.mjs     the whole path: tool → journal → renderer → serve → fetched page
+ *   host.mjs          routing and the security edges of `serve`
+ *   serve.mjs         `serve` as a process: host.json, bind-or-die, address ordering
+ *   e2e.mjs           two MCP processes on one run id, plus a writer killed mid-run
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { setTimeout as sleep } from "node:timers/promises";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = path.join(here, "..", "dist", "index.js");
-const HOME = path.join(here, ".tmp-home");
-const SMOKE_HOME = path.join(here, ".tmp-smoke");
-const E2E_HOME = path.join(here, ".tmp-e2e");
-// Deliberately *not* 7788: that is the shared production default now, and a
-// real agent session on this machine may legitimately hold it while tests run.
-const PORT = Number(process.env.TEST_PANEL_PORT || 7811);
-const ORIGIN = `http://127.0.0.1:${PORT}`;
 
-function run(cmd, args, env) {
+const SUITES = ["vendor.mjs", "am-smoke.mjs", "render-error.mjs", "milestone.mjs", "host.mjs", "serve.mjs", "e2e.mjs"];
+
+function run(file) {
   return new Promise((resolve) => {
-    const p = spawn(cmd, args, { stdio: "inherit", env });
+    const p = spawn(process.execPath, [path.join(here, file)], { stdio: "inherit" });
     p.on("exit", (code) => resolve(code ?? 1));
     p.on("error", () => resolve(1));
   });
@@ -42,60 +41,16 @@ if (!fs.existsSync(SERVER)) {
   process.exit(1);
 }
 
-fs.rmSync(HOME, { recursive: true, force: true });
-fs.rmSync(SMOKE_HOME, { recursive: true, force: true });
-fs.rmSync(E2E_HOME, { recursive: true, force: true });
-
-const env = {
-  ...process.env,
-  REPORT_MCP_HOME: HOME,
-  REPORT_MCP_PORT: String(PORT),
-  SMOKE_HOME,
-  TEST_PANEL_URL: ORIGIN,
-};
-
-console.log("seeding fixture runs...");
-let code = await run("node", [path.join(here, "seed.mjs")], env);
-if (code) process.exit(code);
-
-// stdin is kept open on purpose: closing it makes the MCP transport shut the
-// server down, which is exactly what we do not want for the life of the suite.
-const server = spawn("node", [SERVER], { env, stdio: ["pipe", "ignore", "inherit"] });
-
-let up = false;
-for (let i = 0; i < 60 && !up; i++) {
-  try {
-    up = (await fetch(`${ORIGIN}/api/health`)).ok;
-  } catch {
-    await sleep(200);
-  }
-}
-if (!up) {
-  console.error(`panel did not come up on ${ORIGIN}`);
-  server.kill("SIGKILL");
-  process.exit(1);
-}
-console.log(`panel ready: ${ORIGIN}`);
-
-// verify-pages.mjs runs its local half here (no network, no deploy): it checks
-// the panel the way a static host serves it, which is the shape that silently
-// rotted when the panel moved from inline script to a bundle. Its docs half stays
-// opt-in via DOCS_URL.
-// remote.mjs boots the actual Cloudflare Worker under miniflare (workerd) and
-// drives it with the real agent mirror. A Worker that is only ever typechecked
-// is a Worker nobody has run.
-const suites = ["e2e.mjs", "render.mjs", "live.mjs", "smoke.mjs", "static.mjs", "single.mjs", "lan.mjs", "remote.mjs", "verify-pages.mjs"];
 const failed = [];
-for (const s of suites) {
+for (const s of SUITES) {
   console.log(`\n=== ${s} ===`);
-  const c = await run("node", [path.join(here, s)], env);
-  if (c) failed.push(s);
+  if (await run(s)) failed.push(s);
 }
 
-server.kill("SIGKILL");
-fs.rmSync(HOME, { recursive: true, force: true });
-fs.rmSync(SMOKE_HOME, { recursive: true, force: true });
-fs.rmSync(E2E_HOME, { recursive: true, force: true });
+// Suites clean up after themselves; this is the belt, for a run that threw mid-file.
+for (const d of fs.readdirSync(here)) {
+  if (d.startsWith(".tmp-")) fs.rmSync(path.join(here, d), { recursive: true, force: true });
+}
 
 console.log(failed.length ? `\nFAILED: ${failed.join(", ")}` : "\nall suites passed");
 process.exit(failed.length ? 1 : 0);

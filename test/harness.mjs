@@ -1,35 +1,59 @@
 /**
  * Shared plumbing for the test suites.
  *
- * Two things are worth sharing rather than copying a third time:
+ * Three things are worth sharing rather than copying a sixth time:
  *
- *   connectMcp()          a minimal MCP client over stdio — JSON-RPC framing,
- *                         notification collection (used to assert stdout purity)
- *                         and parsing of the server's stderr boot lines.
- *   createEventSourceShim() the SSE-over-fetch reader. jsdom ships no
- *                         EventSource, and the framing logic (event:/data:
- *                         blocks split on blank lines) is subtle enough that
- *                         two copies would drift.
- *
- * Suites keep their own `check`/`results` locals: they differ in what they
- * print and how they exit, and a shared reporter buys nothing.
+ *   connectMcp()   a minimal MCP client over stdio — JSON-RPC framing, notification
+ *                  collection (used to assert stdout purity) and parsing of the
+ *                  server's stderr boot lines.
+ *   startServe()   spawns `report-mcp serve` on a free port and waits for its health
+ *                  endpoint, so suites never sleep a guess.
+ *   makeReport()   the PASS/FAIL line printer and the exit code, identical everywhere.
  */
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const SERVER = path.join(here, "..", "dist", "index.js");
+export const REPO = path.join(here, "..");
+export const FIXTURES_DIR = path.join(here, "fixtures");
+
+/**
+ * The journal as the tests see it: raw JSONL, no import of the code under test.
+ *
+ * Suites read the file rather than `summarize()` on purpose — a fixture asserted
+ * against the same function that builds it proves nothing about the file format.
+ */
+export function parseJournalSafe(file) {
+  let text = "";
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      out.push(JSON.parse(line));
+    } catch {
+      out.push({ kind: "UNPARSEABLE", line });
+    }
+  }
+  return out;
+}
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Ask the OS for a port nobody holds, then get out of its way fast.
  *
- * Suites that need their own listener use this instead of a hardcoded port:
- * 7788 is the shared production default, and a real agent session on this
- * machine may legitimately hold it while tests run.
+ * Suites that need their own listener use this instead of a hardcoded port: 7788 is
+ * the production default, and a real `serve` on this machine may legitimately hold it
+ * while tests run.
  */
 export function freePort() {
   return new Promise((resolve, reject) => {
@@ -45,9 +69,9 @@ export function freePort() {
 /**
  * Poll `cond` until it is truthy (or the timeout).
  *
- * E2E assertions wait for a *state* rather than a fixed delay: 700ms was
- * enough for local fs.watch but the same code on a loaded CI box needs more,
- * and a fixed sleep that is too short turns into a flaky red.
+ * Assertions wait for a *state* rather than a fixed delay: a loaded CI box needs more
+ * than 700ms for a child process to render a page, and a sleep that is too short
+ * turns into a flaky red.
  */
 export async function waitFor(cond, { timeout = 4000, interval = 40 } = {}) {
   const deadline = Date.now() + timeout;
@@ -64,81 +88,29 @@ export async function waitFor(cond, { timeout = 4000, interval = 40 } = {}) {
   }
 }
 
-/** Node has no fetch in the jsdom window; bridge it to the absolute origin. */
-export const createFetcher = (origin) => (u, o) => fetch(new URL(String(u), origin), o);
-
-/**
- * Minimal EventSource over fetch streaming.
- *
- * Live log hooks are optional: suites that want a transcript pass them, the
- * others stay quiet so the suite output only carries assertions.
- */
-export function createEventSourceShim(fetchFn, { onEvent, onError, onClose, onListenerError } = {}) {
-  return class EventSourceShim {
-    constructor(url) {
-      this.listeners = new Map();
-      this.onerror = null;
-      this.readyState = 0;
-      this.ac = new AbortController();
-      fetchFn(url, { signal: this.ac.signal })
-        .then((res) => {
-          this.readyState = 1;
-          const reader = res.body.getReader();
-          const dec = new TextDecoder();
-          let acc = "";
-          const pump = () =>
-            reader.read().then(({ value, done }) => {
-              if (done) return;
-              acc += dec.decode(value, { stream: true });
-              let i;
-              while ((i = acc.indexOf("\n\n")) >= 0) {
-                const block = acc.slice(0, i);
-                acc = acc.slice(i + 2);
-                const em = /^event: (.+)$/m.exec(block);
-                const dm = /^data: (.+)$/m.exec(block);
-                if (!em || !dm) continue;
-                onEvent?.(em[1], dm[1]);
-                for (const fn of this.listeners.get(em[1]) ?? []) {
-                  try {
-                    fn({ data: dm[1] });
-                  } catch (e) {
-                    onListenerError?.(e);
-                  }
-                }
-              }
-              return pump();
-            });
-          return pump();
-        })
-        .catch((e) => {
-          onError?.(e);
-          if (this.onerror) this.onerror(e);
-        });
-    }
-    addEventListener(type, fn) {
-      if (!this.listeners.has(type)) this.listeners.set(type, []);
-      this.listeners.get(type).push(fn);
-    }
-    removeEventListener(type, fn) {
-      const list = this.listeners.get(type);
-      if (list) this.listeners.set(type, list.filter((f) => f !== fn));
-    }
-    close() {
-      onClose?.();
-      this.ac.abort();
-      this.readyState = 2;
-    }
+export function makeReport() {
+  const results = [];
+  return {
+    check(name, cond, extra) {
+      results.push({ name, ok: !!cond, extra });
+      console.log(`${cond ? "PASS" : "FAIL"}  ${name}${extra ? "  " + extra : ""}`);
+    },
+    finish() {
+      const failed = results.filter((r) => !r.ok);
+      console.log(`\n${results.length - failed.length}/${results.length} passed`);
+      process.exit(failed.length ? 1 : 0);
+    },
   };
 }
 
 /**
- * Spawn a server process and speak MCP to it over stdio.
+ * Spawn a `report-mcp` process and speak MCP to it over stdio.
  *
- * Resolves only once the server has announced its panel URL on stderr, so the
- * caller gets a usable client or a throw with the boot log attached.
+ * Resolves only once the server has announced its storage root and run id on stderr,
+ * so the caller gets a usable client or a throw with the boot log attached.
  */
-export async function connectMcp(env, { serverPath = SERVER, timeout = 15000 } = {}) {
-  const proc = spawn("node", [serverPath], { env, stdio: ["pipe", "pipe", "pipe"] });
+export async function connectMcp(env, { args = [], serverPath = SERVER, timeout = 15000 } = {}) {
+  const proc = spawn("node", [serverPath, ...args], { env, stdio: ["pipe", "pipe", "pipe"] });
 
   let stdoutBuf = "";
   let stderrBuf = "";
@@ -146,7 +118,7 @@ export async function connectMcp(env, { serverPath = SERVER, timeout = 15000 } =
   let nextId = 1;
   const pending = new Map();
   const notifications = [];
-  const meta = { panelUrl: null, runId: null, storage: null, lanUrls: [] };
+  const meta = { hostUrl: null, runId: null, storage: null };
 
   proc.stdout.on("data", (d) => {
     stdoutBuf += d.toString();
@@ -176,14 +148,9 @@ export async function connectMcp(env, { serverPath = SERVER, timeout = 15000 } =
   proc.stderr.on("data", (d) => {
     stderrBuf += d.toString();
     let m;
-    if (!meta.panelUrl && (m = /\[report-mcp\] panel\s+(\S+)/.exec(stderrBuf))) {
-      meta.panelUrl = m[1].replace(/\/#.*$/, "");
-    }
-    // Each extra address a wildcard bind is reachable on gets its own `lan` line.
-    for (const m of stderrBuf.matchAll(/\[report-mcp\] lan\s+(\S+)/g)) {
-      const u = m[1].replace(/\/#.*$/, "");
-      if (!meta.lanUrls.includes(u)) meta.lanUrls.push(u);
-    }
+    // The host line carries a trailing " (pid N)" or the "未运行" explanation; the URL
+    // is the first whitespace-delimited token either way.
+    if (!meta.hostUrl && (m = /\[report-mcp\] host\s+(http:\/\/\S+)/.exec(stderrBuf))) meta.hostUrl = m[1];
     if (!meta.runId && (m = /\[report-mcp\] run id\s+(\S+)/.exec(stderrBuf))) meta.runId = m[1];
     if (!meta.storage && (m = /\[report-mcp\] storage\s+(\S+)/.exec(stderrBuf))) meta.storage = m[1];
   });
@@ -201,10 +168,9 @@ export async function connectMcp(env, { serverPath = SERVER, timeout = 15000 } =
     failAll(`could not spawn server: ${e.message}`);
   });
 
-  // The boot lines arrive as separate stderr writes in the order
-  // panel → storage → run id; resolving on the first alone races callers
-  // that assert on runId immediately after connect.
-  const up = await waitFor(() => Boolean(meta.panelUrl && meta.runId && meta.storage), { timeout, interval: 50 });
+  // storage and run id arrive as separate stderr writes; resolving on the first alone
+  // races callers that assert on runId immediately after connect.
+  const up = await waitFor(() => Boolean(meta.runId && meta.storage), { timeout, interval: 50 });
   if (!up) {
     proc.kill("SIGKILL");
     throw new Error(`server never announced boot lines (exit=${exitedWith})\n${stderrBuf}`);
@@ -219,7 +185,7 @@ export async function connectMcp(env, { serverPath = SERVER, timeout = 15000 } =
           pending.delete(id);
           reject(new Error("timeout: " + method));
         }
-      }, 10000);
+      }, 20000);
     });
     proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
     return promise;
@@ -235,9 +201,15 @@ export async function connectMcp(env, { serverPath = SERVER, timeout = 15000 } =
     return JSON.parse(res.content[0].text);
   }
 
-  /** Convenience: tools/call in one step. */
+  /** Call a tool and return its payload — or the raw result when it failed. */
   async function call(name, args = {}) {
-    return text(await rpc("tools/call", { name, arguments: args }));
+    const res = await rpc("tools/call", { name, arguments: args });
+    return res.isError ? res : text(res);
+  }
+
+  /** The joined tool text, for asserting on a renderer's own error output. */
+  function errorText(res) {
+    return res.content.map((c) => c.text).join("");
   }
 
   return {
@@ -246,19 +218,16 @@ export async function connectMcp(env, { serverPath = SERVER, timeout = 15000 } =
     notify,
     text,
     call,
+    errorText,
     notifications,
-    get panelUrl() {
-      return meta.panelUrl;
+    get hostUrl() {
+      return meta.hostUrl;
     },
     get runId() {
       return meta.runId;
     },
     get storage() {
       return meta.storage;
-    },
-    /** Extra addresses the panel advertised on its `lan` boot lines. */
-    get lanUrls() {
-      return [...meta.lanUrls];
     },
     get stderr() {
       return stderrBuf;
@@ -269,6 +238,58 @@ export async function connectMcp(env, { serverPath = SERVER, timeout = 15000 } =
       } catch {
         /* already gone */
       }
+    },
+  };
+}
+
+/**
+ * `report-mcp serve` on its own port and home, ready to fetch from.
+ *
+ * Returns the process plus the health payload. `stop()` kills it; a suite that wants
+ * the exit code uses `exited`, which resolves with {code, signal, stderr}.
+ */
+export async function startServe({ home, port, host = "127.0.0.1", env = {}, args = [] }, { timeout = 8000 } = {}) {
+  const proc = spawn("node", [SERVER, "serve", "--host", host, "--port", String(port), ...args], {
+    env: { ...process.env, REPORT_MCP_HOME: home, AM_NO_UPDATE_CHECK: "1", ...env },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderrBuf = "";
+  let stdoutBuf = "";
+  proc.stderr.on("data", (d) => (stderrBuf += d.toString()));
+  proc.stdout.on("data", (d) => (stdoutBuf += d.toString()));
+  const exited = new Promise((resolve) => {
+    proc.once("exit", (code, signal) => resolve({ code, signal, stderr: stderrBuf, stdout: stdoutBuf }));
+  });
+  proc.on("error", () => {});
+
+  const origin = `http://${host}:${port}`;
+  let health = null;
+  const up = await waitFor(
+    async () => {
+      const r = await fetch(`${origin}/api/health`).catch(() => null);
+      if (!r?.ok) return false;
+      health = await r.json();
+      return true;
+    },
+    { timeout, interval: 60 },
+  );
+  if (!up) {
+    proc.kill("SIGKILL");
+    throw new Error(`serve did not come up on ${origin}\n${stderrBuf}`);
+  }
+  return {
+    proc,
+    origin,
+    port,
+    host,
+    health,
+    get stderr() {
+      return stderrBuf;
+    },
+    exited,
+    stop: (signal = "SIGKILL") => {
+      if (proc.exitCode === null && !proc.killed) proc.kill(signal);
+      return exited;
     },
   };
 }

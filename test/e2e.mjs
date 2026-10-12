@@ -1,352 +1,101 @@
 #!/usr/bin/env node
 /**
- * End-to-end: the loop the other suites each cover one half of.
+ * Suite: two MCP processes writing one run.
  *
- *   smoke.mjs   a client can call the tools over stdio and read the HTTP API
- *   render.mjs  the panel renders records
- *   live.mjs    the panel reacts to appends — but live.mjs performs the append
- *               itself, hand-writing id/runId/seq/ts, which sidesteps the tool
- *               handlers and RunWriter entirely
+ * This is the append-only guarantee under the only concurrency the tool actually
+ * sees: several agents sharing `REPORT_MCP_RUN_ID`, each awaiting its own tool calls.
+ * The seq re-sync (compare the file size, recount the lines) is what keeps their
+ * records from colliding, and a page named by its milestone seq is what keeps their
+ * *files* from colliding.
  *
- * Nothing therefore checked that a *tool call* becomes something a *human sees*.
- * Every assertion here comes from a real MCP tool call crossing a real process
- * boundary to a real HTTP panel rendered in jsdom. The test never writes a run
- * file; if the writer emitted a malformed envelope, only this suite would fail.
- *
- * Three phases:
- *   1. one agent, one run, full lifecycle start → end, asserted after each call
- *   2. two server processes sharing one run: seq stays gap-free and the panel
- *      sees the other process's records live (the REPORT_MCP_RUN_ID path)
- *   3. SIGKILL both writers mid-run, restart: history intact, seq resumes, run
- *      closes, and a fresh panel still renders it
- *
- * Timing note: the detail view refreshes on the SSE `runs` event immediately,
- * while the sidebar reloads through `reloadRuns()`, which debounces by 600ms
- * (public/index.html). Assertions therefore wait for the state they check
- * instead of assuming both panes move together.
+ * It also covers the crash case: a writer killed mid-session, and a new process that
+ * must pick up the numbering from the file rather than from memory.
  */
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-import { JSDOM } from "jsdom";
+import { connectMcp, freePort, makeReport, parseJournalSafe, startServe, waitFor } from "./harness.mjs";
+import { sheetDraft } from "./drafts.mjs";
 
-import { connectMcp, createEventSourceShim, createFetcher, sleep, waitFor } from "./harness.mjs";
+const HOME = path.join(process.cwd(), "test", ".tmp-e2e");
+fs.rmSync(HOME, { recursive: true, force: true });
+const RUN = "run_e2e_shared_000001";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const HOME = path.join(here, ".tmp-e2e");
-const RUN1 = "run_e2e_lifecycle_0001";
-const RUN2 = "run_e2e_multiwriter_0002";
-
-fs.rmSync(HOME, { recursive: true, force: true }); // self-contained: no leftovers from prior runs
-
-const envFor = (runId) => ({
-  ...process.env,
-  REPORT_MCP_HOME: HOME,
-  REPORT_MCP_PORT: "0",
-  REPORT_MCP_RUN_ID: runId,
-});
-
-const results = [];
-const check = (name, cond, extra) => {
-  results.push(!!cond);
-  console.log(`${cond ? "PASS" : "FAIL"}  ${name}${extra != null ? "  " + extra : ""}`);
-};
-
-const readRecords = (runId) =>
-  fs
-    .readFileSync(path.join(HOME, "runs", `${runId}.jsonl`), "utf8")
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-
-/** Wrap a jsdom instance in the accessors every assertion needs. */
-function panelOf(dom) {
-  const w = dom.window;
-  const el = (id) => w.document.getElementById(id);
-  const item = (n) => w.document.querySelectorAll(".run-item")[n];
-  return {
-    dom,
-    window: w,
-    $: el,
-    // Never-throwing readers for the `extra` argument: a missing node should
-    // surface as a FAIL with a readable value, not abort the rest of the phase.
-    txt: (id) => el(id)?.textContent ?? `(missing #${id})`,
-    bar: (id) => el(id)?.querySelector("i")?.style?.width ?? "(missing bar)",
-    entries: () => w.document.querySelectorAll(".entry").length,
-    items: () => [...w.document.querySelectorAll(".run-item")],
-    itemText: (n) => (item(n)?.textContent ?? "(no item)").replace(/\s+/g, " ").trim(),
-    sidebarChip: (n) => item(n)?.querySelector(".chip")?.textContent ?? "(no chip)",
-    sidebarBar: (n) => item(n)?.querySelector(".bar i")?.style?.width ?? "(no bar)",
-    sidebarErr: (n) => Boolean(item(n)?.querySelector(".chip.error")),
-    click: (node) => node.dispatchEvent(new w.MouseEvent("click", { bubbles: true })),
-  };
-}
-
-/** Open the panel exactly as a human would: at the viewUrl a tool handed us. */
-async function openPanel(viewUrl) {
-  // viewUrl is `<origin>/#/run/<id>`; strip the fragment AND any trailing slash
-  // before re-adding one, or `origin + "/"` becomes a double slash.
-  const origin = viewUrl.split("#")[0].replace(/\/+$/, "");
-  const html = await (await fetch(origin + "/")).text();
-  const nodeFetch = createFetcher(origin);
-  const dom = new JSDOM(html, {
-    url: viewUrl,
-    runScripts: "dangerously",
-    // The panel ships as an external bundle; without this jsdom never loads it.
-    resources: "usable",
-    pretendToBeVisual: true,
-    beforeParse(window) {
-      window.fetch = nodeFetch;
-      window.EventSource = createEventSourceShim(nodeFetch);
-      window.addEventListener("error", (e) => console.log("PAGE ERROR:", e.error?.stack || e.message));
-    },
-  });
-  return panelOf(dom);
-}
-
+const { check, finish } = makeReport();
 const clients = [];
-const doms = [];
-async function connect(env) {
-  const c = await connectMcp(env);
+let host = null;
+
+async function agent(name, tag) {
+  const c = await connectMcp({ ...process.env, REPORT_MCP_HOME: HOME, REPORT_MCP_RUN_ID: RUN });
   clients.push(c);
+  await c.rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name, version: "0" } });
+  c.notify("notifications/initialized", {});
   return c;
 }
-async function open(viewUrl) {
-  const p = await openPanel(viewUrl);
-  doms.push(p.dom);
-  return p;
+
+/** Both agents run at the same time; the awaits inside each call keep the writes interleaved. */
+async function publishPages(c, n, label) {
+  const out = [];
+  for (let i = 1; i <= n; i++) {
+    out.push(await c.call("report_page", { title: `${label} ${i}`, slug: `${label}-${i}`, draft: sheetDraft(`${label} page ${i}`) }));
+  }
+  return out;
 }
 
-const TITLE1 = "E2E：agent → 人类";
-const TITLE2 = "E2E：双写者共享一个 run";
-
 try {
-  /* ---------------- phase 1: one agent, full lifecycle ---------------- */
-  console.log("--- phase 1: agent → human, one run ---");
-  const A = await connect(envFor(RUN1));
-  check("server announces panel + run on stderr",
-    A.panelUrl.startsWith("http://127.0.0.1:") && A.runId === RUN1,
-    `panel=${A.panelUrl} run=${A.runId}`);
+  const a = await agent("e2e-a", "alpha");
+  const b = await agent("e2e-b", "beta");
+  check("both processes share one run id", a.runId === RUN && b.runId === RUN, `${a.runId} / ${b.runId}`);
 
-  const start = await A.call("report_start", {
-    title: TITLE1,
-    agent: "e2e-agent",
-    task: "验证 tool 调用能一路出现在面板上",
-    tags: ["e2e", "lifecycle"],
-    metadata: { phase: 1 },
-  });
-  check("report_start ok, own run", start.ok && start.runId === RUN1, JSON.stringify(start));
-  check("viewUrl points at this panel + run",
-    start.viewUrl === `${A.panelUrl}/#/run/${RUN1}`, start.viewUrl);
+  await a.call("report_start", { title: "Two agents, one run", tags: ["e2e"] });
 
-  // The human follows the link the agent reported.
-  const P = await open(start.viewUrl);
-  check("panel shows the run title",
-    await waitFor(() => P.$("rTitle")?.textContent === TITLE1), P.txt("rTitle"));
-  check("sidebar lists exactly this run", await waitFor(() => P.items().length === 1),
-    "items=" + P.items().length);
-  check("status starts running", P.$("rStatus")?.textContent === "running", P.txt("rStatus"));
-  check("one timeline entry (start)", await waitFor(() => P.entries() === 1), "entries=" + P.entries());
-  check("sidebar shows the run", P.itemText(0).includes("E2E"), P.itemText(0));
+  const [pa, pb] = await Promise.all([publishPages(a, 3, "alpha"), publishPages(b, 3, "beta")]);
+  check("every page published", [...pa, ...pb].every((p) => p.ok === true), JSON.stringify([...pa, ...pb].filter((p) => !p.ok).map((p) => p.error)).slice(0, 200));
 
-  await A.call("report_progress", { phase: "采集", percent: 20, step: 1, totalSteps: 3, message: "读取输入" });
-  check("progress bar moved to 20%", await waitFor(() => P.bar("rProgress") === "20%"), P.bar("rProgress"));
-  check("progress label = 20%", await waitFor(() => P.txt("rProgressLabel") === "20%"), P.txt("rProgressLabel"));
-  check("sidebar bar tracks progress", await waitFor(() => P.sidebarBar(0) === "20%"), P.sidebarBar(0));
-  check("phase visible in timeline", await waitFor(() => P.$("timeline")?.textContent.includes("采集")));
+  // one start + six milestones + six published records
+  const JOURNAL = path.join(HOME, "runs", `${RUN}.jsonl`);
+  await waitFor(() => parseJournalSafe(JOURNAL).length === 13, { timeout: 30000 });
+  const recs = parseJournalSafe(JOURNAL);
 
-  await A.call("report_status", { status: "blocked", message: "需要人类确认范围" });
-  check("status chip = blocked",
-    await waitFor(() => P.$("rStatus")?.textContent === "blocked"), P.txt("rStatus"));
-  check("chip class matches status", P.$("rStatus")?.className === "chip blocked", P.$("rStatus")?.className);
-  check("blocked message shown in timeline",
-    await waitFor(() => P.$("timeline")?.textContent.includes("需要人类确认范围")));
-  check("sidebar chip = blocked", await waitFor(() => P.sidebarChip(0) === "blocked"), P.sidebarChip(0));
+  check("the journal holds 13 records with no torn line", recs.length === 13 && !recs.some((r) => r.kind === "UNPARSEABLE"), `${recs.length} records`);
+  const seqs = recs.map((r) => r.seq).sort((x, y) => x - y);
+  check("seq is unique across both writers", new Set(seqs).size === seqs.length, seqs.join(","));
+  check("seq has no gap", seqs.every((s, i) => s === i + 1), seqs.join(","));
+  check("every record carries the shared run id", recs.every((r) => r.runId === RUN));
+  check("milestones and published records pair up", recs.filter((r) => r.kind === "milestone").length === 6 && recs.filter((r) => r.kind === "published").length === 6);
 
-  await A.call("report_log", { level: "error", message: "来源 X 解析失败", detail: { code: 500 } });
-  check("header surfaces lastError",
-    await waitFor(() => P.txt("rMeta").includes("来源 X 解析失败")), P.txt("rMeta").slice(-120));
-  check("sidebar shows err badge", await waitFor(() => P.sidebarErr(0)), P.itemText(0));
-  check("log entry in timeline",
-    await waitFor(() => P.$("timeline")?.textContent.includes("来源 X 解析失败")));
+  const files = fs.readdirSync(path.join(HOME, "pages", RUN)).sort();
+  check("six pages, six files, no overwrite", files.length === 6, files.join(","));
+  check("each page is named by its own milestone seq", files.every((f) => /^\d+-(alpha|beta)-\d\.html$/.test(f)), files.join(","));
+  const refs = new Set(recs.filter((r) => r.kind === "published").map((r) => r.path));
+  check("no two published records share a path", refs.size === 6, String(refs.size));
 
-  await A.call("report_progress", { phase: "分析", percent: 60, step: 2, totalSteps: 3 });
-  check("bar advanced to 60%", await waitFor(() => P.txt("rProgressLabel") === "60%"), P.txt("rProgressLabel"));
-  check("progress did not clobber the blocked status",
-    P.$("rStatus")?.textContent === "blocked", P.txt("rStatus"));
+  // --- a writer dies mid-run; the next one must re-sync from the file ---
+  const before = parseJournalSafe(path.join(HOME, "runs", `${RUN}.jsonl`)).length;
+  a.proc.kill("SIGKILL");
+  await waitFor(() => a.proc.exitCode !== null);
+  const c = await agent("e2e-c", "gamma");
+  const late = await c.call("report_page", { title: "After the crash", slug: "gamma-1", draft: sheetDraft("gamma after crash") });
+  check("a new writer continues the numbering", late.ok === true && late.seq > before, `seq=${late.seq} before=${before}`);
+  const after = parseJournalSafe(path.join(HOME, "runs", `${RUN}.jsonl`));
+  const afterSeqs = after.map((r) => r.seq);
+  check("still no duplicates after the restart", new Set(afterSeqs).size === afterSeqs.length, afterSeqs.sort((x, y) => x - y).join(","));
+  check("the crashed agent's records survived", after.filter((r) => r.kind === "milestone" && r.title.startsWith("alpha")).length === 3);
 
-  await A.call("report_status", { status: "running", message: "已确认范围" });
-  check("unblocked", await waitFor(() => P.$("rStatus")?.textContent === "running"), P.txt("rStatus"));
-
-  await A.call("report_result", {
-    title: "对比矩阵",
-    summary: "五个方案横向对比完成。",
-    markdown: "### 结论\n\n- 混合方案**最优**",
-    html: "<p><em>sandbox probe</em></p>",
-    metrics: [{ name: "行数", value: 1284, unit: "条" }, { name: "维度", value: 9, unit: "项" }],
-    artifacts: [
-      { name: "matrix.csv", path: "/tmp/matrix.csv", type: "csv" },
-      { name: "chart", path: path.join(here, "fixtures", "chart.png"), type: "image" },
-    ],
-    links: [{ label: "看板", url: "https://example.com/board" }],
-    data: { ok: true },
-  });
-  check("result card rendered",
-    await waitFor(() => Boolean(P.dom.window.document.querySelector(".result-card"))));
-  const card = P.dom.window.document.querySelector(".result-card");
-  check("metrics rendered", card.querySelectorAll(".metric").length === 2,
-    "got " + card.querySelectorAll(".metric").length);
-  check("artifact rendered", card.querySelectorAll("ul.art li").length === 2,
-    "got " + card.querySelectorAll("ul.art li").length);
-  check("markdown field rendered through the tool path",
-    !!card.querySelector(".md-body strong"));
-  check("html field sandboxed through the tool path", (() => {
-    const f = card.querySelector("iframe.arthtml");
-    return !!f && f.getAttribute("sandbox") === "allow-scripts" && f.getAttribute("srcdoc").includes("sandbox probe");
-  })());
-  const eimg = card.querySelector(".artimg");
-  check("image artifact served from tool-written record", await waitFor(async () => {
-    if (!eimg || !String(eimg.getAttribute("src")).startsWith("/api/file?")) return false;
-    const r = await fetch(A.panelUrl + eimg.getAttribute("src"));
-    if (!r.ok) return false;
-    const b = new Uint8Array(await r.arrayBuffer());
-    return b[0] === 0x89 && b[1] === 0x50;
-  }), eimg?.getAttribute("src"));
-  check("result counted in header", await waitFor(() => P.txt("rMeta").includes("结果")), P.txt("rMeta"));
-
-  const end = await A.call("report_end", { status: "done", summary: "全部完成，遗留项见结果卡。" });
-  check("report_end computes duration", typeof end.durationMs === "number", "durationMs=" + end.durationMs);
-  check("status chip = done", await waitFor(() => P.$("rStatus")?.textContent === "done"), P.txt("rStatus"));
-  check("duration shown", await waitFor(() => P.txt("rMeta").includes("耗时")), P.txt("rMeta"));
-  check("end summary in timeline",
-    await waitFor(() => P.$("timeline")?.textContent.includes("全部完成")));
-  check("sidebar flips to done", await waitFor(() => P.sidebarChip(0) === "done"), P.sidebarChip(0));
-
-  const panelInfo = await A.call("report_panel");
-  check("report_panel count matches the DOM",
-    panelInfo.recordCount === P.entries(), `api=${panelInfo.recordCount} dom=${P.entries()}`);
-  check("report_panel status matches the DOM", panelInfo.status === "done", panelInfo.status);
-
-  // The envelope is what live.mjs bypasses by hand-writing records: assert the
-  // writer's own contract here, with the tool path as the only writer.
-  const r1 = readRecords(RUN1);
-  check("8 records on disk", r1.length === 8, "len=" + r1.length);
-  check("seq is exactly 1..8", r1.map((r) => r.seq).join(",") === "1,2,3,4,5,6,7,8",
-    r1.map((r) => r.seq).join(","));
-  check("kind order matches the calls",
-    r1.map((r) => r.kind).join(",") === "start,progress,status,log,progress,status,result,end",
-    r1.map((r) => r.kind).join(","));
-  check("runId uniform across the file", r1.every((r) => r.runId === RUN1));
-  check("ids unique (no collisions)", new Set(r1.map((r) => r.id)).size === r1.length);
-  check("timestamps are ISO and parseable", r1.every((r) => !Number.isNaN(Date.parse(r.ts))));
-
-  /* ---------------- phase 2: two processes, one run ---------------- */
-  console.log("\n--- phase 2: two writers sharing REPORT_MCP_RUN_ID ---");
-  const B1 = await connect(envFor(RUN2));
-  const B2 = await connect(envFor(RUN2));
-  check("both servers joined the same run", B1.runId === RUN2 && B2.runId === RUN2,
-    `${B1.runId} / ${B2.runId}`);
-  check("each server has its own panel port", B1.panelUrl !== B2.panelUrl,
-    `${B1.panelUrl} vs ${B2.panelUrl}`);
-
-  const s2 = await B1.call("report_start", { title: TITLE2, agent: "writer-A" });
-  const Q = await open(s2.viewUrl); // human watching writer-A's panel
-  check("panel for run 2 opened",
-    await waitFor(() => Q.$("rTitle")?.textContent === TITLE2), Q.txt("rTitle"));
-
-  // Interleaved across two processes. Each holds its own in-memory seq, so
-  // without the pre-append size check every one of these would be seq 2.
-  const seqs = [];
-  seqs.push((await B1.call("report_progress", { phase: "A", percent: 30, step: 1, totalSteps: 3 })).seq);
-  seqs.push((await B2.call("report_log", { message: "B 写了一条" })).seq);
-  seqs.push((await B1.call("report_log", { message: "A 写了一条" })).seq);
-  seqs.push((await B2.call("report_progress", { phase: "B", percent: 70, step: 2, totalSteps: 3 })).seq);
-  seqs.push((await B2.call("report_status", { status: "waiting", message: "B 在等外部资源" })).seq);
-  seqs.push((await B1.call("report_progress", { phase: "A", percent: 90, step: 3, totalSteps: 3 })).seq);
-  check("interleaved seqs are contiguous", seqs.join(",") === "2,3,4,5,6,7", seqs.join(","));
-  check("no seq assigned twice", new Set(seqs).size === seqs.length, seqs.join(","));
-
-  const r2 = readRecords(RUN2);
-  check("one file holds all 7 records", r2.length === 7, "len=" + r2.length);
-  check("file seq is exactly 1..7", r2.map((r) => r.seq).join(",") === "1,2,3,4,5,6,7",
-    r2.map((r) => r.seq).join(","));
-  check("record ids never collide", new Set(r2.map((r) => r.id)).size === r2.length);
-
-  // The panel was opened before those writes and must catch them live — this is
-  // the human-visible half: a process they are not watching writes, and they see it.
-  check("panel absorbed the other process's records live",
-    await waitFor(() => Q.entries() === 7, { timeout: 6000 }), "entries=" + Q.entries());
-  check("last writer's progress drives the bar",
-    await waitFor(() => Q.txt("rProgressLabel") === "90%"), Q.txt("rProgressLabel"));
-  check("cross-process status surfaced", await waitFor(() => Q.txt("rStatus") === "waiting"), Q.txt("rStatus"));
-  check("other process's log in timeline",
-    await waitFor(() => Q.$("timeline")?.textContent.includes("B 写了一条")));
-
-  /* ---------------- phase 3: crash both, restart, recover ---------------- */
-  console.log("\n--- phase 3: SIGKILL mid-run, restart, resume ---");
-  B1.close();
-  B2.close();
-  await sleep(300); // let the SIGKILLs land before the restart
-
-  const B3 = await connect(envFor(RUN2));
-  check("restarted server rejoins the same run", B3.runId === RUN2, B3.runId);
-
-  const after = await B3.call("report_panel");
-  check("history survives the crash", after.recordCount === 7, "count=" + after.recordCount);
-  check("status preserved across restart", after.status === "waiting", after.status);
-
-  // init() recounts lines, so the first post-restart append must continue the
-  // sequence rather than restart it or duplicate the last number.
-  const resumed = await B3.call("report_log", { message: "重启后继续" });
-  check("seq resumes past the crash", resumed.seq === 8, "seq=" + resumed.seq);
-
-  const end2 = await B3.call("report_end", { status: "done", summary: "崩溃后重启并收尾。" });
-  check("run closes after restart", end2.ok && end2.runId === RUN2, JSON.stringify({ seq: end2.seq }));
-
-  const R = await open(end2.viewUrl); // a fresh panel, post-restart
-  check("fresh panel renders the full run",
-    await waitFor(() => R.entries() === 9), "entries=" + R.entries());
-  check("chip = done in fresh panel", await waitFor(() => R.$("rStatus")?.textContent === "done"),
-    R.txt("rStatus"));
-  check("pre-crash records still visible",
-    await waitFor(() => R.$("timeline")?.textContent.includes("B 写了一条")
-      && R.$("timeline")?.textContent.includes("A 写了一条")));
-  check("post-restart record visible",
-    await waitFor(() => R.$("timeline")?.textContent.includes("重启后继续")));
-
-  /* ---------------- phase 4: both runs in one sidebar ---------------- */
-  console.log("\n--- phase 4: sidebar across processes ---");
-  // The sidebar reloads through the 600ms-debounced `runs` event, so it can
-  // trail the detail pane; re-query per check because reloads replace nodes.
-  const sidebar = () => R.items();
-  check("both runs listed", await waitFor(() => sidebar().length === 2), "items=" + sidebar().length);
-  check("most recently active run first", await waitFor(() => sidebar()[0]?.textContent.includes("双写者")),
-    sidebar().map((i) => i.querySelector(".t")?.textContent).join(" | "));
-  check("both runs marked done",
-    await waitFor(() => sidebar().every((i) => i.querySelector(".chip")?.textContent === "done")),
-    sidebar().map((i) => i.querySelector(".chip")?.textContent).join(" | "));
-
-  R.click(sidebar()[1]);
-  check("switching to the other run loads it",
-    await waitFor(() => R.$("rTitle")?.textContent === TITLE1), R.txt("rTitle"));
-  check("switched run keeps its own record count",
-    await waitFor(() => R.entries() === 8), "entries=" + R.entries());
-  check("hash follows the switch", R.window.location.hash.includes(RUN1), R.window.location.hash);
+  // --- the host reads the same journal both writers built ---
+  host = await startServe({ home: HOME, port: await freePort() });
+  const detail = await (await fetch(`${host.origin}/api/runs/${RUN}`)).json();
+  check("the derived summary counts all seven pages", detail.summary.pageCount === 7, String(detail.summary.pageCount));
+  check("and finds nothing pending", detail.summary.pending.length === 0, JSON.stringify(detail.summary.pending));
+  check("status is still running with no end record", detail.summary.status === "running");
+  await c.call("report_end", { status: "done", summary: "two agents, one journal" });
+  check("the index reflects the close", await waitFor(async () => (await (await fetch(`${host.origin}/api/runs`)).json()).runs.some((r) => r.status === "done")));
 } catch (err) {
   check("no exception", false, String(err && err.stack ? err.stack : err));
 } finally {
-  for (const c of clients) c.close();
-  for (const d of doms) {
-    try {
-      d.window.close();
-    } catch {
-      /* already closed */
-    }
-  }
+  for (const cl of clients) cl.close();
+  if (host) await host.stop("SIGTERM");
+  fs.rmSync(HOME, { recursive: true, force: true });
 }
 
-const failed = results.filter((x) => !x).length;
-console.log(`\n${results.length - failed}/${results.length} passed`);
-process.exit(failed ? 1 : 0);
+finish();

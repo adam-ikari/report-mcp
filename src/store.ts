@@ -7,12 +7,9 @@ import crypto from "node:crypto";
 import type { ReportRecord, RunSummary } from "./types.js";
 import { summarize } from "./summarize.js";
 
-// Re-exported so the existing `import { summarize } from "./store.js"` sites
-// (and the panel's equivalence test) keep resolving; the implementation lives in
-// ./summarize.js so the Worker mirror can import it without pulling in node:fs.
 export { summarize };
 
-/** Where runs live. Override with REPORT_MCP_HOME. */
+/** Where runs and pages live. Override with REPORT_MCP_HOME. */
 export function reportHome(): string {
   return process.env.REPORT_MCP_HOME?.trim() || path.join(os.homedir(), ".report-mcp");
 }
@@ -26,14 +23,12 @@ function newId(): string {
   return crypto.randomUUID();
 }
 
-const VALID_KINDS = new Set<ReportRecord["kind"]>([
-  "start",
-  "progress",
-  "status",
-  "log",
-  "result",
-  "end",
-]);
+const VALID_KINDS = new Set<ReportRecord["kind"]>(["start", "milestone", "published", "end"]);
+
+/** How long one append waits for the run's lock before writing unlocked. */
+const LOCK_WAIT_MS = 2000;
+/** A lock older than this belongs to a writer that died mid-append. */
+const LOCK_STALE_MS = 2000;
 
 /** Count newline-terminated records; tolerates a trailing partial line. */
 function countLines(text: string): number {
@@ -49,7 +44,7 @@ export function parseRecords(text: string): ReportRecord[] {
     if (!line) continue;
     try {
       const rec = JSON.parse(line) as ReportRecord;
-      if (rec && typeof rec === "object" && typeof rec.kind === "string") out.push(rec);
+      if (rec && typeof rec === "object" && typeof rec.kind === "string" && VALID_KINDS.has(rec.kind)) out.push(rec);
     } catch {
       // A torn last line from a concurrent writer is expected; skip it.
     }
@@ -62,11 +57,13 @@ export function parseRecords(text: string): ReportRecord[] {
  *
  * One MCP connection normally owns one run, so the sequence counter is kept in
  * memory. If another process writes to the same file (REPORT_MCP_RUN_ID shared
- * across servers) the size check before each append detects it and re-syncs.
+ * across servers) a lock directory around the append keeps the re-sync and the
+ * write in one critical section, so the two processes cannot pick the same seq.
  */
 export class RunWriter {
   readonly runId: string;
   readonly filePath: string;
+  private readonly lockPath: string;
 
   private seq = 0;
   private expectedSize = 0;
@@ -75,6 +72,7 @@ export class RunWriter {
   constructor(runsDir: string, runId: string) {
     this.runId = runId;
     this.filePath = path.join(runsDir, `${runId}.jsonl`);
+    this.lockPath = `${this.filePath}.lock`;
   }
 
   async init(): Promise<void> {
@@ -87,8 +85,7 @@ export class RunWriter {
     }
     this.seq = countLines(text);
     this.expectedSize = Buffer.byteLength(text);
-    const first = parseRecords(text)[0];
-    this.startedAt = first?.ts;
+    this.startedAt = parseRecords(text)[0]?.ts;
   }
 
   /**
@@ -100,6 +97,53 @@ export class RunWriter {
    */
   async append(kind: ReportRecord["kind"], body: Record<string, unknown>): Promise<ReportRecord> {
     if (!VALID_KINDS.has(kind)) throw new Error(`unknown record kind: ${String(kind)}`);
+    const held = await this.acquire();
+    try {
+      return await this.appendLocked(kind, body);
+    } finally {
+      if (held) await this.release();
+    }
+  }
+
+  /**
+   * Cross-process lock around "measure the tail, choose seq, append".
+   *
+   * The size check alone is a check-then-act race: two processes can both see the same
+   * size and both pick seq N+1, which puts a duplicate into the one structure whose
+   * whole job is to be a sequence. `mkdir` is atomic on every filesystem we care about,
+   * so it is the lock. Losing it is not a reason to fail a report — after the wait
+   * budget we append unlocked, which is the old behaviour, rather than erroring.
+   */
+  private async acquire(): Promise<boolean> {
+    await fsp.mkdir(path.dirname(this.lockPath), { recursive: true }).catch(() => {});
+    const deadline = Date.now() + LOCK_WAIT_MS;
+    for (;;) {
+      try {
+        await fsp.mkdir(this.lockPath);
+        return true;
+      } catch (err) {
+        const e = err as NodeJS.ErrnoException;
+        if (e.code !== "EEXIST") return false;
+        const st = await fsp.stat(this.lockPath).catch(() => null);
+        // A writer killed mid-append leaves the lock behind; its own mtime says when.
+        if (st && Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+          await fsp.rm(this.lockPath, { recursive: true, force: true }).catch(() => {});
+          continue;
+        }
+        if (Date.now() > deadline) return false;
+        await new Promise((r) => setTimeout(r, 2 + Math.floor(Math.random() * 6)));
+      }
+    }
+  }
+
+  private async release(): Promise<void> {
+    await fsp.rm(this.lockPath, { recursive: true, force: true }).catch(() => {});
+  }
+
+  private async appendLocked(
+    kind: ReportRecord["kind"],
+    body: Record<string, unknown>,
+  ): Promise<ReportRecord> {
     let size = 0;
     try {
       size = (await fsp.stat(this.filePath)).size;
@@ -142,87 +186,60 @@ export class RunWriter {
   }
 }
 
+/** What `report-mcp serve` publishes about itself, so agents can build honest links. */
+export interface HostState {
+  url: string;
+  urls: string[];
+  pid: number;
+  /** Recorded so a copied home directory cannot make an agent advertise another machine's host. */
+  home: string;
+  startedAt: string;
+  version: string;
+}
+
 export class Store {
   readonly home: string;
   readonly runsDir: string;
-  readonly statePath: string;
+  readonly pagesDir: string;
+  readonly hostPath: string;
   readonly runId: string;
-  private writer?: RunWriter;
-  private watching = new Set<(file: string) => void>();
-  private watcher?: fs.FSWatcher;
-  private fileWatchers = new Map<string, { w?: fs.FSWatcher; cbs: Set<() => void> }>();
-  private debounce?: NodeJS.Timeout;
 
   constructor(runId?: string) {
     this.home = reportHome();
     this.runsDir = path.join(this.home, "runs");
-    this.statePath = path.join(this.home, "panel.json");
+    this.pagesDir = path.join(this.home, "pages");
+    this.hostPath = path.join(this.home, "host.json");
     this.runId = runId?.trim() || process.env.REPORT_MCP_RUN_ID?.trim() || newRunId();
     fs.mkdirSync(this.runsDir, { recursive: true });
-    this.startWatcher();
   }
 
-  private startWatcher() {
-    try {
-      this.watcher = fs.watch(this.runsDir, () => {
-        clearTimeout(this.debounce);
-        this.debounce = setTimeout(() => {
-          for (const fn of this.watching) fn("*");
-        }, 40);
-      });
-      this.watcher.on("error", () => {
-        /* runs dir gone or unsupported fs: panel falls back to polling */
-      });
-    } catch {
-      /* polling fallback in the panel covers this */
-    }
-  }
-
-  onChange(fn: (file: string) => void): () => void {
-    this.watching.add(fn);
-    return () => this.watching.delete(fn);
+  filePath(runId: string): string {
+    return path.join(this.runsDir, `${runId}.jsonl`);
   }
 
   /**
-   * Watch one run file for appends.
+   * Where a rendered page goes.
    *
-   * Directory watchers on Linux only report create/delete entries, not content
-   * changes to files that already exist — so the per-file watch is what actually
-   * makes the panel live. Refcounted: the first subscriber opens it, the last
-   * one closes it.
+   * The seq is part of the name, so a corrected draft is a *new* page and the old
+   * link keeps working — which is what lets the host serve these with `immutable`.
    */
-  watchRun(runId: string, cb: () => void): () => void {
-    let entry = this.fileWatchers.get(runId);
-    if (!entry) {
-      const created: { w?: fs.FSWatcher; cbs: Set<() => void> } = { cbs: new Set() };
-      try {
-        created.w = fs.watch(this.filePath(runId), { persistent: true }, () => {
-          for (const fn of created.cbs) fn();
-        });
-        created.w.on("error", () => {
-          /* file removed or fs unsupported: the periodic sweep still updates */
-        });
-      } catch {
-        created.w = undefined;
-      }
-      this.fileWatchers.set(runId, created);
-      entry = created;
-    }
-    entry.cbs.add(cb);
-
-    return () => {
-      const cur = this.fileWatchers.get(runId);
-      if (!cur) return;
-      cur.cbs.delete(cb);
-      if (cur.cbs.size > 0) return;
-      try {
-        cur.w?.close();
-      } catch {
-        /* ignore */
-      }
-      this.fileWatchers.delete(runId);
-    };
+  pagePath(runId: string, seq: number, slug: string): string {
+    return path.join(this.pagesDir, runId, `${seq}-${slug}.html`);
   }
+
+  /** Home-relative form, for the journal. Absolute paths in records do not survive a moved home. */
+  pageRef(runId: string, seq: number, slug: string): string {
+    return path.posix.join("pages", runId, `${seq}-${slug}.html`);
+  }
+
+  /** Resolve a journal `path` back to disk. Returns null for anything outside pages/. */
+  resolvePage(ref: string): string | null {
+    if (!ref.startsWith("pages/") || ref.includes("..")) return null;
+    const abs = path.join(this.home, ref);
+    return abs.startsWith(this.pagesDir + path.sep) ? abs : null;
+  }
+
+  private writer?: RunWriter;
 
   async writerFor(runId = this.runId): Promise<RunWriter> {
     if (runId === this.runId && this.writer) return this.writer;
@@ -230,10 +247,6 @@ export class Store {
     await w.init();
     if (runId === this.runId) this.writer = w;
     return w;
-  }
-
-  filePath(runId: string): string {
-    return path.join(this.runsDir, `${runId}.jsonl`);
   }
 
   async readRecords(runId: string): Promise<ReportRecord[]> {
@@ -248,9 +261,8 @@ export class Store {
   }
 
   /**
-   * Runs ordered by last activity (not by file mtime), so restoring or copying
-   * a run file does not reorder the sidebar. mtime is only used to pick which
-   * files are worth reading.
+   * Runs ordered by last activity (not by file mtime), so restoring or copying a run
+   * file does not reorder the index. mtime only picks which files are worth reading.
    */
   async listRuns(limit = 100): Promise<RunSummary[]> {
     let names: string[] = [];
@@ -281,46 +293,17 @@ export class Store {
     return out.slice(0, limit);
   }
 
-  /** Read appended bytes starting at `offset`. Returns a whole-line chunk. */
-  readTail(runId: string, offset: number): Promise<{ chunk: string; next: number } | null> {
-    return (async () => {
-      let size = 0;
-      try {
-        size = (await fsp.stat(this.filePath(runId))).size;
-      } catch {
-        return null;
-      }
-      if (offset > size) offset = 0; // truncated or rotated
-      if (offset === size) return { chunk: "", next: offset };
-
-      const fh = await fsp.open(this.filePath(runId), "r").catch(() => null);
-      if (!fh) return null;
-      try {
-        const len = size - offset;
-        const buf = Buffer.alloc(len);
-        const { bytesRead } = await fh.read(buf, 0, len, offset);
-        const text = buf.subarray(0, bytesRead).toString("utf8");
-        const lastNl = text.lastIndexOf("\n");
-        if (lastNl < 0) return { chunk: "", next: offset }; // wait for a full line
-        return { chunk: text.slice(0, lastNl + 1), next: offset + lastNl + 1 };
-      } finally {
-        await fh.close();
-      }
-    })();
-  }
-
   /**
-   * Publish where the panel lives for the human. `urls` is informational — the
-   * single `url` stays the one agents and scripts read; `urls` additionally
-   * carries the LAN addresses when the panel is bound wide.
+   * Announce this host. The MCP process reads it to decide whether a published page
+   * has a link worth returning — no HTTP probe, no port scanning, no lying URL.
    */
-  writePanelState(url: string, urls: string[] = [url]): void {
+  writeHostState(url: string, urls: string[], version: string): void {
     try {
-      fs.mkdirSync(path.dirname(this.statePath), { recursive: true });
+      fs.mkdirSync(this.home, { recursive: true });
       fs.writeFileSync(
-        this.statePath,
+        this.hostPath,
         JSON.stringify(
-          { url, urls, pid: process.pid, runId: this.runId, startedAt: new Date().toISOString() },
+          { url, urls, pid: process.pid, home: this.home, startedAt: new Date().toISOString(), version },
           null,
           2,
         ),
@@ -331,27 +314,30 @@ export class Store {
     }
   }
 
-  clearPanelState(): void {
+  clearHostState(): void {
     try {
-      const cur = JSON.parse(fs.readFileSync(this.statePath, "utf8"));
-      if (cur.pid === process.pid) fs.unlinkSync(this.statePath);
+      const cur = JSON.parse(fs.readFileSync(this.hostPath, "utf8"));
+      if (cur.pid === process.pid) fs.unlinkSync(this.hostPath);
     } catch {
       /* best effort */
     }
   }
 
-  close(): void {
-    clearTimeout(this.debounce);
-    this.watcher?.close();
-    this.watching.clear();
-    for (const entry of this.fileWatchers.values()) {
-      try {
-        entry.w?.close();
-      } catch {
-        /* ignore */
-      }
-      entry.cbs.clear();
+  /**
+   * The live host, if one is running.
+   *
+   * `host.json` outlives a crash, so the pid is checked: a stale file must not make
+   * the tool return a link that 404s.
+   */
+  readHostState(): HostState | null {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.hostPath, "utf8")) as HostState;
+      if (!raw?.url || !raw?.pid) return null;
+      if (raw.home && raw.home !== this.home) return null;
+      process.kill(raw.pid, 0);
+      return raw;
+    } catch {
+      return null;
     }
-    this.fileWatchers.clear();
   }
 }

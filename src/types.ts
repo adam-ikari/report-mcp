@@ -1,56 +1,21 @@
 /**
- * Shared record model.
+ * Record and view models.
  *
- * Everything the agent reports is one of six record kinds. The union is
- * append-only: a run is simply an ordered list of `ReportRecord` lines in a
- * JSONL file.
+ * A run is an append-only list of these records, one JSON line each in
+ * `$REPORT_MCP_HOME/runs/<runId>.jsonl`. Four kinds: the run's header, a draft the
+ * agent submitted, the page that draft became, and the closing record.
+ *
+ * A `milestone` with no matching `published` is a legitimate end state — the draft
+ * was bad, or the renderer was unavailable — and the journal keeps it on purpose:
+ * the agent retries as a new record rather than rewriting history.
  */
-
-/** Run-level lifecycle, as understood by a human reader. */
-export type RunStatus =
-  | "running"
-  | "waiting"
-  | "blocked"
-  | "error"
-  | "done"
-  | "failed"
-  | "aborted";
 
 /** Terminal statuses, set by `report_end`. */
 export type EndStatus = "done" | "failed" | "aborted";
 
-export type LogLevel = "debug" | "info" | "warn" | "error";
+export type RunStatus = "running" | EndStatus;
 
-export type RecordKind = "start" | "progress" | "status" | "log" | "result" | "end";
-
-export interface Artifact {
-  /** Human-readable name, e.g. "Final report". */
-  name: string;
-  /** Local filesystem path. Absolute is recommended; relative resolves against the server's cwd. */
-  path?: string;
-  /** Remote or local URL. */
-  url?: string;
-  /**
-   * Free-form type hint. `image`, `markdown` and `html` artifacts with a
-   * `path` are rendered inline by the panel via `GET /api/file`.
-   */
-  type?: string;
-  description?: string;
-  size?: number;
-}
-
-export interface Metric {
-  name: string;
-  value: number | string;
-  unit?: string;
-  /** Optional qualifier shown next to the value, e.g. "p95", "target > 200". */
-  hint?: string;
-}
-
-export interface Link {
-  label: string;
-  url: string;
-}
+export type RecordKind = "start" | "milestone" | "published" | "end";
 
 interface BaseRecord {
   id: string;
@@ -70,45 +35,31 @@ export interface StartRecord extends BaseRecord {
   metadata?: Record<string, unknown>;
 }
 
-export interface ProgressRecord extends BaseRecord {
-  kind: "progress";
-  phase: string;
-  /** 0..100. Omit for an indeterminate phase. */
-  percent?: number;
-  step?: number;
-  totalSteps?: number;
-  message?: string;
-  detail?: unknown;
-}
-
-export interface StatusRecord extends BaseRecord {
-  kind: "status";
-  status: RunStatus;
-  message?: string;
-  detail?: unknown;
-}
-
-export interface LogRecord extends BaseRecord {
-  kind: "log";
-  level: LogLevel;
-  message: string;
-  detail?: unknown;
-}
-
-export interface ResultRecord extends BaseRecord {
-  kind: "result";
+/** A draft as submitted, before anybody tried to render it. */
+export interface MilestoneRecord extends BaseRecord {
+  kind: "milestone";
   title: string;
-  summary?: string;
-  status?: RunStatus;
-  /** Markdown body, rendered with typography in the panel. */
-  markdown?: string;
-  /** Standalone HTML fragment/document, rendered in a sandboxed iframe. */
-  html?: string;
-  artifacts?: Artifact[];
-  metrics?: Metric[];
-  links?: Link[];
-  /** Arbitrary structured payload for machine consumption. */
-  data?: unknown;
+  /** The answer-me-with-html draft: frontmatter + `##` panels + fenced components. */
+  draft: string;
+  /** Path segment of the page; derived from the title when the agent omits it. */
+  slug: string;
+  tags?: string[];
+}
+
+/** The rendered page. `for` is the seq of the `milestone` it came from. */
+export interface PublishedRecord extends BaseRecord {
+  kind: "published";
+  for: number;
+  title: string;
+  slug: string;
+  /** Home-relative, e.g. `pages/run_…/3-cache-choice.html`. Never absolute. */
+  path: string;
+  bytes: number;
+  sha256: string;
+  /** Version of the vendored renderer that produced the page. */
+  am: string;
+  /** One line from the renderer's own report (template · theme · panels · STE). */
+  render?: string;
 }
 
 export interface EndRecord extends BaseRecord {
@@ -118,15 +69,23 @@ export interface EndRecord extends BaseRecord {
   durationMs?: number;
 }
 
-export type ReportRecord =
-  | StartRecord
-  | ProgressRecord
-  | StatusRecord
-  | LogRecord
-  | ResultRecord
-  | EndRecord;
+export type ReportRecord = StartRecord | MilestoneRecord | PublishedRecord | EndRecord;
 
-/** Derived, read-only view of a run. Never persisted; recomputed on read. */
+export interface PublishedPage {
+  /** The milestone seq — which is also the file's and the URL's seq. */
+  seq: number;
+  title: string;
+  slug: string;
+  path: string;
+  ts: string;
+  bytes: number;
+  sha256: string;
+}
+
+/**
+ * Derived, read-only view of a run. Never persisted; recomputed on every read, so
+ * a page that arrives late cannot leave stale state behind.
+ */
 export interface RunSummary {
   runId: string;
   title: string;
@@ -138,24 +97,12 @@ export interface RunSummary {
   endedAt?: string;
   durationMs?: number;
   recordCount: number;
-  progress?: {
-    phase?: string;
-    percent?: number | null;
-    step?: number;
-    totalSteps?: number;
-    message?: string;
-  };
-  logCounts: Record<LogLevel, number>;
-  resultCount: number;
-  /** Most recent error-level signal (log line or status=error). */
-  lastError?: string;
+  pageCount: number;
+  pages: PublishedPage[];
+  /** Drafts submitted but never rendered — the human's "something is missing" signal. */
+  pending: { seq: number; title: string; ts: string }[];
   /** The wrap-up text of a non-successful `report_end`. */
   failureSummary?: string;
+  /** How the run is grouped in the index: first tag, then agent, then a fallback. */
+  group: string;
 }
-
-export const EMPTY_LOG_COUNTS: Record<LogLevel, number> = {
-  debug: 0,
-  info: 0,
-  warn: 0,
-  error: 0,
-};

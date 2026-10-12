@@ -6,7 +6,11 @@ import { defineConfig } from "vitepress";
  * Deployed to GitHub Pages under `/report-mcp/` — hence `base`. Everything
  * VitePress generates (asset URLs, markdown links, themeConfig links) is
  * prefixed with it; `docs/public/` contents are copied verbatim on top, which
- * is how the panel demo lands at `/report-mcp/panel/`.
+ * is how the example report pages land at `/report-mcp/reports/`.
+ *
+ * Those pages are NOT site content: scripts/render-samples.mjs renders
+ * examples/*.md with the vendored renderer and commits the result, and CI
+ * re-renders with --check. They are the vendor's usability gate.
  *
  * `cleanUrls` stays off: GitHub Pages serves `guide/install.html`, but nothing
  * rewrites `/guide/install` for a plain static artifact, so extensionless links
@@ -15,15 +19,10 @@ import { defineConfig } from "vitepress";
 export default defineConfig({
   lang: "zh-CN",
   title: "report-mcp",
-  description: "agent 向人类汇报的 MCP server：单向推送进度、状态、日志与结构化成果，落盘 JSONL，实时呈现到本地面板",
+  description: "里程碑汇报的 MCP server：agent 交一份草稿，渲染成一页自包含 HTML，常驻宿主给它一个手机上能点的链接",
   base: "/report-mcp/",
   cleanUrls: false,
   lastUpdated: true,
-
-  // docs/public/panel/assets/*.md are demo artifact *data* files staged by
-  // scripts/stage-panel.mjs, not documentation — without this VitePress
-  // compiles them into pages (and SSR chokes on their content).
-  srcExclude: ["**/panel/**"],
 
   head: [
     ["link", { rel: "icon", type: "image/svg+xml", href: "/report-mcp/favicon.svg" }],
@@ -36,11 +35,11 @@ export default defineConfig({
       "meta",
       {
         property: "og:description",
-        content: "agent 向人类汇报的 MCP server：单向、非阻塞、可审计、实时面板",
+        content: "agent 交草稿，一页自包含 HTML 落盘，宿主给链接：里程碑汇报的 MCP server",
       },
     ],
     ["meta", { property: "og:image", content: "https://adam-ikari.github.io/report-mcp/images/og-image.png" }],
-    ["meta", { property: "og:image:alt", content: "report-mcp 面板：左侧 run 列表，右侧实时时间线" }],
+    ["meta", { property: "og:image:alt", content: "report-mcp 渲染出的一页汇报：面板网格、流程图与时序图" }],
     ["meta", { name: "twitter:card", content: "summary_large_image" }],
     ["meta", { name: "twitter:image", content: "https://adam-ikari.github.io/report-mcp/images/og-image.png" }],
   ],
@@ -50,7 +49,7 @@ export default defineConfig({
       { text: "指南", link: "/guide/install" },
       { text: "参考", link: "/reference/tools" },
       { text: "更新日志", link: "/changelog" },
-      { text: "在线 Demo", link: "/panel/", target: "_blank" },
+      { text: "示例汇报", link: "/reports/01-cache-selection.html", target: "_blank" },
       { text: "Releases", link: "https://github.com/adam-ikari/report-mcp/releases" },
       { text: "GitHub", link: "https://github.com/adam-ikari/report-mcp" },
     ],
@@ -61,15 +60,13 @@ export default defineConfig({
         items: [
           { text: "安装与接入", link: "/guide/install" },
           { text: "使用方法", link: "/guide/usage" },
-          { text: "面板与 Demo", link: "/guide/panel" },
         ],
       },
       {
         text: "参考",
         items: [
           { text: "Tool 一览", link: "/reference/tools" },
-          { text: "架构与数据模型", link: "/reference/architecture" },
-          { text: "设计决策与局限", link: "/reference/design" },
+          { text: "架构与决策", link: "/reference/architecture" },
         ],
       },
       {
@@ -82,7 +79,7 @@ export default defineConfig({
 
     notFound: {
       title: "404 · 页面不存在",
-      quote: "链接可能写错了，也可能这个 run 早被清掉了。面板不会说谎，但 URL 会过期。",
+      quote: "页面 URL 由 run id、seq 和 slug 拼出来，永久不变——所以大概率是这条链接自己写错了。",
       linkText: "回到首页",
       linkLabel: "回到首页",
     },
@@ -120,7 +117,7 @@ export default defineConfig({
 
     footer: {
       message: "agent → 人类的单向汇报通道 · MIT License",
-      copyright: "report-mcp v0.3.0",
+      copyright: "report-mcp v0.4.0",
     },
   },
 });

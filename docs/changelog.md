@@ -6,81 +6,88 @@
 npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp.git
 ```
 
-## Unreleased
+## v0.4.0 · 2026-10-10
 
-**面板改用 React、可以开到局域网、适配手机。**
+**从「实时面板」改成「里程碑汇报」。** agent 交一份精简草稿，工具把它渲染成**一页自包含
+HTML** 落盘，`report-mcp serve` 作为唯一的 HTTP 宿主给它一个手机上能点的链接。人真正想看的
+不是一屏滚动的日志，是一页能读完的汇报。
 
-### 前端
+v0.3.1 从未发布到 npm，这一版**不做兼容**：没有旧 tool 的别名层，没有旧记录格式的读取垫片。
+装过的仓库请重新 `report_start`。
 
-- **面板是 React 19 应用**，esbuild 打成**一个** `public/panel.js`（gzip ~189 kB）。没有框架和 dev server，不拉 CDN，不用外部字体
-- `public/index.html` 缩成手写的壳：样式表 + `#root` + 一个 `<script src="panel.js">`。样式表不从 JSX import——窄屏规则是承重的，放在它作用的标记旁边更好读，而且 `<style>` 在 bundle 解析前就生效
-- **产物入库**，与 `dist/` 同一个理由：全局 git 安装没有 devDependencies。CI 门禁从只盯 `dist/` 扩到同时盯 `public/panel.js`；`prepare` 多跑一个 `scripts/check-panel-build.mjs`，只在 bundle 缺失时失败
-- **agent 的 markdown 换成 `marked` + `DOMPurify`。** `marked` 会把源码里的原始 HTML 原样透传（完整 markdown 因此可用），`DOMPurify` 按严格 allowlist 过滤——`style` 属性、`iframe`、`svg`、`javascript:` / `data:` URL 全部挡掉。取代那版手写的「先整体转义再排版」：它也安全，但允许列表要自己维护，遇到没实现的特性还会静默退化成纯文本
-- 用了 Ant Design 6 的 `ConfigProvider` / `Button` / `Tag` / `Tooltip` / `Empty` / `Skeleton` / `Progress`，主题 token 从现有 CSS 变量推导，不引入第二套视觉。**时间线、成果卡、抽屉、run 列表保持手写**——它们承载文档和截图里的那套设计，且整个断言套件是照它们的 DOM 写的
-- 迁移中修掉的问题：服务端原本只路由 `/` 和 `/api/*`，`panel.js` 会 404；`env(safe-area-inset-*)` 因 viewport meta 缺 `viewport-fit=cover` 而恒为 0；深链进来时侧栏不刷新（老代码靠 `open()` 的副作用顺带做掉）
+### 破坏性变更
 
-### 侧栏按项目分组
+- **工具面 7 → 4**：`report_start` / `report_page` / `report_end` / `report_syntax`。
+  删 `report_progress`、`report_status`、`report_log`、`report_result`、`report_panel`
+- **记录 kind 6 → 4**：`start` / `milestone` / `published` / `end`。草稿与它渲染出的页面
+  是两条记录，重试是新 seq，不覆盖历史
+- **实时面板整体删除**：React 前端与 `public/`、SSE 与 `fs.watch`、**整套端口仲裁
+  （promote / attach / 5s 接管）**、`/api/file` 与 `REPORT_MCP_FILE_ROOTS` /
+  `MAX_FILE_BYTES`、marked + DOMPurify 那条渲染链
+- **Cloudflare Worker 镜像删除**（`src/remote.ts`、`worker/`、`REPORT_MCP_REMOTE*`）
+- **`report-mcp` 不再监听任何端口，也不 spawn 后台进程。** 托管是 `serve` 子命令的事，
+  由人或 Docker 常驻。MCP 进程跟着 agent 会话生灭，页面留在磁盘上
+- **`engines.node: ">=20"`**（渲染器用 `Array.prototype.toSorted`）。低版本下 `serve` 照跑，
+  `report_page` 返回一句说明
+- 页面 URL 形态 `/r/<runId>/<seq>-<slug>`，`Cache-Control: immutable`
 
-- `report_start` 的 `tags` 一直标着「用于在面板里分组」，面板此前只把它当头部一行文本显示。现在按 `tags[0]` → `agent` → `未分组` 分桶
-- **一个 run 只进一个组**，其余 tag 作为胶囊挂在条目上。复制进每个 tag 所在的组会让侧栏谎报 run 数量
-- 组序按组内最近活动的那条排，不看组名；**当前打开的 run 所在组钉住不可折叠**
+### 新增
 
-### 局域网
+- **vendored 渲染器**：`vendor/am/am.mjs`（answer-me-with-html 0.5.0，575 KB，MIT，上游生成物）。
+  `manifest.json` 钉 sha256，`scripts/check-vendor.mjs` 进 `prepare` 与 CI，
+  `scripts/update-am.mjs` 升版。**不自建第二套渲染器**
+- **`report_page` 会同步等一次渲染并可能失败**——它是这套工具里唯一的 commit point。
+  失败返回渲染器原文（`✗ L12 [flow]` + 正确示例 + `am help flow`），一个字不改
+- **`report_syntax`**：直接返回渲染器自己的 `am list` / `am help <topic>`，
+  不手写第二份会漂移的语法规范
+- **`report-mcp serve`**：只读静态宿主。索引页服务端渲染、无 JS、不在请求时渲染任何东西；
+  页面带 gzip、`nosniff`、`no-referrer`、`X-Frame-Options: DENY`、
+  `Cross-Origin-Resource-Policy: same-origin`；`/api/runs*` **仅回环**；非 GET/HEAD 一律 405
+- **`host.json` + pid 判活**决定返回值里的链接：宿主在跑才给 URL，否则 `url: null` 加一句
+  起什么命令。零 HTTP 探测，链接从不撒谎
+- **局域网地址枚举**从 v0.3 那条未发布的线继承下来（只枚举 IPv4，私网优先，link-local 丢弃），
+  `0.0.0.0` 时逐行打印可点地址并在索引页顶部挂无鉴权警告
+- **Docker**：`ENTRYPOINT` 是 `serve`（容器就是那个常驻宿主），MCP 客户端容器
+  `--entrypoint node … dist/index.js` 共享同一个 volume
+- **`examples/` 三份真草稿** + `scripts/render-samples.mjs`，渲染进 `docs/public/reports/`
+  并入库；`--check` 是 CI 门禁——**示例页生成不出来 = vendor 坏了**。文档站导航上
+  「在线 Demo」换成「示例汇报」
+- 环境变量：新增 `REPORT_MCP_PUBLIC_URL`（容器端口映射 / 反代后面必须设）；
+  `REPORT_MCP_HOST` / `PORT` 现在只作用于 `serve`
 
-- **`REPORT_MCP_HOST=0.0.0.0` 即局域网可访问**，且**所有可点地址自动算出来打出来**——不用再 `ipconfig` 找 IP：
+### 修掉
 
-  ```
-  [report-mcp] panel    http://192.168.1.57:7788/#/run/run_2026...  (host)
-  [report-mcp] lan      http://127.0.0.1:7788/#/run/run_2026...
-  ```
-
-  枚举本机非回环网卡，私网地址优先（192.168 → 10.x → 172.16-31），其次其他 IPv4，最后是不带 scope id 的全局 IPv6；link-local 被丢弃，因为粘出来的链接必然打不开
-
-- **多个 agent 报出来的链接始终一致。** 宿主的地址列表走 `/api/health` 的 `urls` 字段发布，attach 的进程接管它（每个探测周期重读），配置更窄的后来者不会把 `127.0.0.1` 发给用户。采纳前过滤：只收 `http(s)` 且端口与刚探测到的那个一致
-- **端口仲裁不受影响**：探测恒走 `127.0.0.1`，只有对外发布的地址会变
-- `panel.json` 多写一个 `urls` 字段（`url` 保持原义不变）
-
-### 手机
-
-- **窄屏重排，不是把桌面版缩小。** run 列表变成左上角 ☰ 唤出的抽屉（点遮罩 / `Esc` / 选中 run 都收起），顶部窄条承载「当前 run 标题 + 状态 chip」，高度改用 `100dvh` 并避开 `env(safe-area-inset-*)`，另加 `overscroll-behavior` 与 `-webkit-text-size-adjust: 100%`
-- **44px 点击区，按实测补齐。** 按钮、`summary`、`run-item`、分组表头、书签删除按钮全部抬到 ≥44px，`<input>` 用 16px 字号（小于 16px 会让 iOS Safari 聚焦时把整页放大），并统一 `touch-action: manipulation` 去掉 300ms 延迟
-- **工具栏分两行，因为一行放不下。** 五个筛选 + 两个操作按钮实测 490px，手机只有 320–430px。原先靠横向滚动，于是「自动滚动」「复制链接」整个落在屏幕外、且没有任何提示——一个能用的按钮就此变成死的。现在筛选独占一行可横滑，两个操作平分下一行，始终可见；`561px` 以上恢复单行（横屏手机有宽度、缺高度，分两行要白搭 ~50px）
-- **头部 meta 改成可横滑单行。** 它在 320px 上会折成四行（104px）、横屏手机上折三行（57px），是整个头部最贵也最不重要的部分。现在报告本身在首屏之上，全部字段都还在
-- **补齐 GFM 表格样式。** 上一版放开了表格渲染，面板却没有表格样式；`display:block` + `max-width:100%` + `overflow-x:auto` 让表格自己横滑而不是把整页撑破
-- **横屏（`max-height: 520px`）单独收紧固定 chrome。** 手机横过来只有 360px 高，窄条 + 头部 + 工具栏一度吃掉 81%，时间线只剩 19%。收紧 padding 与字号、标题与 meta 合并成一行后回到 54%；**只收紧留白，绝不缩点击区**——缩小汉堡键省 6px 是错的交易，漏这一次等于丢掉整个侧栏
-- **抽屉状态走 `#app.nav-open` class，JS 不判断视口宽度**——样式表只在窄屏 media query 里认它，桌面端是死的；顺带避开了 jsdom 没有的 `matchMedia`，抽屉逻辑因此可测
-- **「复制链接」加 `execCommand` 兜底**：`navigator.clipboard` 只在安全上下文可用，局域网上的 `http://192.168.x.x` 恰恰不是，不兜底的话这个按钮在手机上永远失败
-
-### 远端面板（Cloudflare Worker 镜像）
-
-- **新增 `worker/`：一个可选的远端面板镜像。** agent 攒批把记录推到 Worker，在那儿能看到同一份时间线。**它是镜像不是替代品**——本地 JSONL 仍是唯一真相，本地面板不受影响，推送全程不阻塞任何 tool 调用
-- **`summarize()` 抽到 `src/summarize.ts`，两个运行时共用。** 本机（读 JSONL）和 Worker（读 KV）跑同一份实现，避免出现「同一个 run 两边状态不一样」。`store.ts` 仍然 re-export，现有引用不变
-- **面板零改动。** 面板靠问 `/api/runs` 要 JSON 来决定 live/static；Worker 在同源提供这个接口，panel/src 完全不知道它的存在。Worker 自己 serve `index.html` + `panel.js`（`scripts/build-worker-assets.mjs` 烘进去），**不用 static-assets binding**——Miniflare 4 在资源未命中时自己 404 且不调用 Worker，那样 `/api/*` 和带 token 的壳在测试里全部够不着，等于只测了没部署的那份
-- **鉴权是强制的。** 这是全项目唯一暴露在公网的端点。写入走 header 里的 bearer，读取走浏览器 cookie；`/?token=…` 种下 HttpOnly cookie 后立刻 302，把 token 从地址栏、history 和 Referer 里摘掉。比较是定长逐字符的
-- **KV 存原始记录，不存 summary。** 读取时重算，所以迟到的、乱序到达的推送不会留下过期状态；按 record id 去重，重试不会重复时间线。超出 2000 条/run 会丢最旧的并标记 `truncated`，不静默
-- **制品默认不上传。** `REPORT_MCP_REMOTE_FILES=1` 才上传 `image` / `markdown` / `html` 三种类型（单个 2 MiB），走可选的 R2；`svg` 仍然不传。这是披露决定，所以默认关着
-- 队列有上限，溢出丢最旧的并计数；退出时 flush，所以短会话最后几条不丢。推送失败只记进 stderr 和一个计数
-- 已知短板写进文档：`/api/stream` 是定时快照不是真扇出（要 Durable Object），KV 最终一致，R2 未配时制品退化成普通链接
-
-### 部署
-
-- 新增 `Dockerfile`（多阶段）与 `docker-compose.yml`。MCP 客户端的 `command` 指向 `docker run -i`，`REPORT_MCP_HOME` 挂 volume，宿主侧 `ports` 暴露面板
+- **`published` 的 seq 用错**：原来取 `published` 记录自己的 seq，而文件名和 URL 用的是
+  `milestone` 的——索引页会指向一个不存在的地址。现在两边都是 milestone 的号
+- **`pending` 判定跟着修**：上面那个错位让每一份已渲染的草稿都被当成待渲染
+- **收尾页固定 slug `close`**：标题是 run 的、通常非 ASCII，slugify 出来的混合脚本 URL
+  没人记得住
+- **草稿里的相对 `src=` 与相对图片路径按 agent 的 cwd 解析**（渲染子进程的 cwd），
+  以前落在 report home，指不到 agent 正在干的那个项目的文件
+- **并发 append 加锁**：`<run>.jsonl.lock` 罩住「量尾巴 → 定 seq → append」。
+  改之前 `test/e2e.mjs` 实测能撞出两个 seq 12（check-then-act 竞态），改后连跑九次全绿
+- `report_syntax` 描述里一个多引号导致的 TS 语法错误
+- **索引页不再打出字面 `undefined`**：`end.status` 是磁盘上的数据，`kind` 在读取时验了、`status` 没验。
+  联合之外的值（旧版本写的 `success`）取不到徽章文案，就这么进了人读的那一页。现在未知的状态照
+  原文显示、且不挂不存在的 CSS class，`test/host.mjs` 有一条钉住
+- **索引页的时间戳不再跟着服务器的 locale 走**：`toLocaleString()` 在 `LANG` 未设时打出
+  `10/10/2026, 2:36:38 PM`——中文页面上的一串英文格式。现在是固定 `YYYY-MM-DD HH:MM`，
+  与 am 盖在每页页脚的时间同形
 
 ### 测试
 
-- **新增 `test/mobile.mjs`（80 项）：用真浏览器量布局。** 其余套件都在 jsdom 里渲染面板，而 jsdom 不求值 `@media`——视口多窄，`getComputedStyle` 给的都是桌面级联。窄屏规则此前只有「人工看截图」这一道验证，这个套件是替代品：headless Chromium + DevTools 协议，在 320×640 / 390×800 / 430×800 / 740×360（横屏）/ 768×1024 五个视口上断言真实布局。无 Chromium 时干净跳过而不是失败（`CHROME_PATH` 可指定）
-- 它当场抓出四个真问题，全都是「手工看过」放过的：`.mp-del`（唯一会删东西的按钮）只有 29×16px——demo 没有书签，按钮压根没渲染，所以之前每一道检查都量不到它；`summary { display: flex }`（本意是把折叠行加高到可点）**顺手删掉了展开三角**，因为 marker 只在 `display: list-item` 下生成，行长到 44px 而看上去完全不可展开；`.head .meta` 在 292px 的手机里塞了 947px 内容，滚动条藏了、渐变也没有，正是这次改动想消灭的那种死角；`td` 上的 `nowrap` 把一句话变成 277px 窗口里的 588px 单元格，读一句要横滑三屏（**表格本身没破**，`display:block` 那套撑住了，错的只是阅读成本）
-- 前两条之所以漏掉，是因为早先的探测跑在一个**根本不渲染涉事元素的 fixture 状态**下。所以这个套件在 boot 前先写 `localStorage` 造出书签，并断言真实 run 产生的那条最长 meta 行
-- 套件还纠正了我自己的注释：`.toolbar .seg` 在 320px 上实测 294px 的按钮挤在 292px 的行里，`状态` 少了一截——注释里写的「每个手机宽度都放得下」当时是假的，于是加了 `max-width: 340px` 的 2px padding 补齐，而不是把断言放宽
-- **`test/verify-pages.mjs` 的本地那半进了 `npm test`（36 项）。** 它此前**只能在部署后运行**；面板从内联脚本改成 bundle 之后它仍在断言已不存在于 HTML 里的标记（`html.includes("modeChip")`），而没人能在不部署的情况下执行它，那条断言就烂在仓库里。现在按 Pages 的方式本地服务 `public/`（未知路径 404，让面板走静态分支），断言壳与 `panel.js` 一起发布、深链、demo 渲染、资产相对路径。文档站那半仍需网络，`PAGES_URL` / `DOCS_URL` 显式给出时才跑
-- 修掉那条腐烂断言的同时，把脚本里三处「固定 sleep + 同步读 DOM」换成等状态——React 批处理下它们本来也过不了
-- 新增 `test/lan.mjs`（19 项）：宽绑定、地址真的可达、health 发布、窄配置 attach 后接管地址、默认绑定仍只有回环、异端口/异协议地址被丢弃
-- `test/render.mjs` 增加 24 项：抽屉的四条开关路径、窄条与头部同步、分组的分桶/排序/折叠、media query 里的关键声明、bundle 里的安全属性（不再 `allow-same-origin`、markdown 净化器在位）
-- `render.mjs` / `live.mjs` / `e2e.mjs` 补 `resources: "usable"`：面板成了外部 bundle，不加这个 jsdom 不会去取它，DOM 会是空的
-- **`freePort()` 提到 `test/harness.mjs`**，`single.mjs` 与 `lan.mjs` 共用
-- **新增 `test/remote.mjs`（50 项）**，用 miniflare 起**真的 workerd**（带 KV 和 R2 binding），拿真的 mirror 打真的 HTTP：鉴权四道门、round trip、summary 由记录重算、重试幂等、乱序到达、垃圾输入被过滤、`(run, seq, i)` 穿越被拒、SSE 帧格式、制品默认不上传而 opt-in 后可读、死掉的 mirror 不影响 tool call、队列有界、半配置不启用。最后一段 spawn 真的 server 进程走 stdio 调 tool，靠正常 shutdown flush 验证全链路，并断言本地 JSONL 一条没少
-- 断言总数 258 → 442（其中 80 项来自 `mobile.mjs`，需 Chromium，不在 `npm test` 内），套件 7 → 10
-
+- **432 条断言 / 10 套 → 160 条 / 7 套**。删掉的 231 条几乎全是面板 DOM 断言
+- 新增 `test/milestone.mjs`（40，主 e2e：草稿 → 页面 → journal 顺序 → 宿主 → 链接 → 索引页）、
+  `test/host.mjs`（30，路由与安全）、`test/serve.mjs`（27，宿主生命周期与 bind-or-die）、
+  `test/render-error.mjs`（15，失败路径）、`test/am-smoke.mjs`（20，渲染器 CLI 契约）、
+  `test/vendor.mjs`（11，vendor 完整性）
+- `test/e2e.mjs` 重写为多进程共享 run 的交错写与崩溃恢复（17）
+- 端口绑定与地址枚举这套 v0.3 里零测试的逻辑，现在有 `test/serve.mjs` 盯
+- **手工走了一遍真链路**（`serve` + 一次 stdio 会话：`report_start` → 好草稿 → 坏草稿 →
+  `report_end` 带收尾页），headless Chromium 在 1440 与 390px 上截图看排版。当场发现上面
+  那个时间戳格式，以及一条要写进文档的上游版面决定：**窄屏上面板竖排，但表格与图不缩**
+  （单元格 `min-width: 8em`、SVG `max-width: none`），四列表在 390px 上约 500px 宽要横推。
+  vendor 由 sha 钉死，不 fork 它改版面，能改的是草稿（见[使用方法](/guide/usage#知道人会用手机读)）
 
 ## v0.3.1 · 2026-09-29
 
@@ -127,3 +134,4 @@ npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp
 - 每条汇报是 `$REPORT_MCP_HOME/runs/*.jsonl` 里 append 的一行 JSON：可 diff、可审计，别的程序一行代码读走
 - localhost 面板：文件监听 + SSE，写入到看见的典型延迟 <100ms；绑定 `127.0.0.1`，无鉴权（by design，单机工具）
 - stdio transport 的 stdout 纪律：所有诊断走 stderr，有一条测试专门盯着
+

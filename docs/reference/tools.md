@@ -1,21 +1,20 @@
 # Tool 一览
 
-全部单向、非阻塞，写完立刻返回，不等待任何人的回应。
+四个 tool。三个写，一个查。
 
 **统一返回：**
 
 ```jsonc
-{ "ok": true,
-  "runId": "run_20260924062926_8cf29b",
-  "seq": 7,
-  "kind": "progress",
-  "panelUrl": "http://127.0.0.1:7788",
-  "viewUrl": "http://127.0.0.1:7788/#/run/run_20260924062926_8cf29b" }
+{ "ok": true, "runId": "run_20261010062926_8cf29b", "seq": 2,
+  "page": "pages/run_20261010062926_8cf29b/2-cache-selection.html",
+  "url": "http://127.0.0.1:7788/r/run_20261010062926_8cf29b/2-cache-selection",
+  "indexUrl": "http://127.0.0.1:7788/" }
 ```
 
-失败时是 `{"ok": false, "error": "..."}`，并且 `isError: true`。
+失败时是 `{"ok": false, "error": "..."}` 且 `isError: true`；草稿渲染失败时不是 JSON，
+而是渲染器自己的那段话（见 `report_page`）。
 
-`seq` 是这条记录在 run 内的序号，从 1 开始严格递增。
+`seq` 是这个 run 内的序号，从 1 开始严格递增，同时是页面文件名和 URL 里的那个数字。
 
 ---
 
@@ -23,110 +22,121 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `title` | `string` | ✅ | 人类看得懂的标题 |
+| `title` | `string` | ✅ | 人类看得懂的标题（≤120 字） |
 | `agent` | `string` | | 谁在跑，例如 `research-agent` |
 | `task` | `string` | | 完整任务描述 |
-| `tags` | `string[]` | | 面板分组用 |
+| `tags` | `string[]` | | **第一个 tag 是索引页的分组名** |
 | `metadata` | `object` | | 任意结构，原样保存 |
 
-可选调用；不调就用默认标题。重复调用 = 覆盖标题（取最后一条 `start`）。
+可选调用。不调就页面照发，run 在索引页上显示为未命名；重复调用 = 覆盖标题（取最后一条 `start`）。
 
-## `report_progress`
+返回 `runId`、`indexUrl`、`pagesDir`。宿主没在跑时 `indexUrl` 为 `null` 并附一句 `hint`。
 
-| 字段 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `phase` | `string` | ✅ | 当前阶段名 |
-| `percent` | `number` 0–100 | | 缺省 = 不确定态（滑动动画条） |
-| `step` / `totalSteps` | `number` | | 2 / 5 这种 |
-| `message` | `string` | | 一行人话 |
-| `detail` | `object` | | 任意结构，面板折叠展示 |
-
-只在阶段切换或百分比有**实质变化**时调。
-
-## `report_status`
+## `report_page`
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `status` | enum | ✅ | `running` \| `waiting` \| `blocked` \| `error` \| `done` \| `failed` \| `aborted` |
-| `message` | `string` | | 一句话说明 |
-| `detail` | `object` | | 任意结构 |
+| `title` | `string` | ✅ | 这一页汇报什么 |
+| `draft` | `string` | ✅ | am 草稿，≤64 KB |
+| `slug` | `string` | | URL 段，`[a-z0-9-]`；标题非拉丁文时**建议显式给** |
 
-`waiting` / `blocked` 是「我需要人」的信号，渲染成琥珀色 chip。
+一个里程碑一页。有东西值得让人读的时候调——一个结论、一次对比、一份计划、一件交付物——
+日志行不要调它。
 
-## `report_log`
+**这个调用会同步等一次渲染（典型 0.2–1 s），并且可能失败。** 它是这套工具里唯一的
+commit point，不是 fire-and-forget。
 
-| 字段 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `level` | enum | | `debug` \| `info` \| `warn` \| `error`，默认 `info` |
-| `message` | `string` | ✅ | 事件描述 |
-| `detail` | `object` | | 任意结构 |
+失败时返回的是渲染器的原文，形如：
 
-`error` 级进 `lastError`，在 run 列表里挂红色 `err` 角标。
-
-## `report_result`
-
-| 字段 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `title` | `string` | ✅ | 交付物标题 |
-| `summary` | `string` | | 人话总结 |
-| `markdown` | `string` | | Markdown 正文，面板内排版渲染（标题/列表/引用/代码块/链接） |
-| `html` | `string` | | 一段完整 HTML，面板以 **sandbox iframe** 渲染：脚本可运行，但与父页面完全隔离 |
-| `artifacts[]` | `object[]` | | `{name, path?, url?, type?, description?, size?}` |
-| `metrics[]` | `object[]` | | `{name, value: number\|string, unit?, hint?}` |
-| `links[]` | `object[]` | | `{label, url}` |
-| `data` | `any` | | 任意结构，面板折叠展示 |
-
-**每个有意义的交付物调一次**，不是每条日志。它**不结束** run。
-
-### 文件工件规则（`artifacts[].path`）
-
-- `type` 为 `image` / `markdown` / `html` 且只有 `path`（没有 `url`）时，面板会**内联渲染**这个文件：图片直接显示，markdown 排版展开，html 进 sandbox iframe。其余类型仍是文件名 + 路径条目。
-- 图片支持 `png` `jpg` `jpeg` `gif` `webp`；文本支持 `md` `markdown` `txt` `html` `htm`。**`svg` 不服务**（它是同源的脚本载体）。
-- **建议报绝对路径**。相对路径按 server 进程的 cwd 解析——通常就是 agent 的 cwd，但跨进程共享 run 时未必。
-- `html` 文件永远以 `text/plain` 响应；把它渲染成文档是面板的职责（注入 CSP 后进 sandbox iframe），浏览器直接打开文件地址只会看到源码。
-- 单文件默认上限 **20 MiB**，用 `REPORT_MCP_MAX_FILE_BYTES` 覆盖。
-- 可选加固：`REPORT_MCP_FILE_ROOTS`（冒号分隔的目录白名单），设了之后白名单外的路径一律 403。配 `REPORT_MCP_HOST=0.0.0.0` 暴露面板时建议启用。
-
-例：一份带图、带排版正文的成果卡——
-
-```jsonc
-{ "title": "销量分析",
-  "markdown": "## 结论\n\n- Q3 环比 **+18%**\n- 华东区贡献最大",
-  "artifacts": [
-    { "name": "趋势图", "path": "/abs/out/trend.png", "type": "image" },
-    { "name": "明细报告", "path": "/abs/out/report.md", "type": "markdown" }
-  ],
-  "metrics": [{ "name": "环比", "value": 18, "unit": "%" }] }
 ```
+nothing published — the draft is journalled at seq 2 in /home/you/.report-mcp/runs/run_….jsonl
+failure: draft
+
+✗ L3 [flow] 箭头右边没有目标节点
+  Correct example:
+    A -> B: label
+  Full syntax: am help flow
+```
+
+行号、组件名、正确示例、指路 `am help`，一个字都没改。**改好草稿再调一次就行**，
+重试是一条新 seq，不是覆盖旧的。草稿本身无论渲染成败都已落盘。
+
+成功返回 `seq`、`page`（home 相对路径）、`bytes`、`sha256`、`render`（模板·主题·面板数·STE 一行）、
+`am`（渲染器版本），以及 `url` / `indexUrl`。
+
+### 草稿怎么写
+
+服务端**不改写草稿、不注入 frontmatter、不拼模板**。版面全在草稿里：
+
+````markdown
+---
+template: sheet
+theme: blueprint
+title: 缓存迁移 · 里程碑 1：选型
+subtitle: 三个候选，一个结论
+---
+
+## A 结论 {span=2 meta="一页读完"}
+
+| 候选 | p99 | 崩溃恢复 | 判定 |
+|---|---|---|---|
+| Redis 7 | 1.8 ms | ok 重放 AOF | ok 采用 |
+
+```flow LR
+(Client) -> Gateway: 读请求
+Gateway -> *Redis: 命中?
+```
+````
+
+- frontmatter：`title`、`subtitle`、`template: sheet|doc`、`theme: auto|blueprint|shadcn|paper`、`cols`、`style`、`mode`、`source`
+- 每个 `## ` 是一个面板，`{span=2 meta="…"}` 是面板属性；span 只给必须突出的面板
+- 组件围栏：`flow` `sequence` `er` `tree` `timeline` `limits` `annot` `kv` `callout` `ask`，`html` / `svg` 原样嵌入
+- 其余围栏是代码块：` ```ts src=path lines=18-30 hl=22 ` 可以引用真实文件；` ```diff ` 画补丁
+- 表格是 GFM；单元格里写 `ok` / `no` / `warn` 变成 ✓ / ✗ / ! 角标
+- 图片 `![说明](/绝对路径.png)` 会被嵌进页面，页面仍是单文件（≤5 MB）；相对 `src=` 与相对图片路径按 **MCP server 进程的 cwd** 解析，也就是 agent 干活的那个项目目录
+- 页面自带草稿原文和 Reply / Remark 按钮，读者的批注汇成一段 Markdown 由**他自己**粘回来——这不是回话通道
+
+完整语法用 `report_syntax` 取，别凭记忆编围栏名字。
+
+::: tip 参考页
+本仓库 `examples/` 下有三份真草稿，渲染结果就是文档站「示例汇报」那三页。
+:::
 
 ## `report_end`
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `status` | enum | | `done` \| `failed` \| `aborted`，默认 `done` |
-| `summary` | `string` | | 收尾总结 |
+| `summary` | `string` | | 一段话收尾（≤4000 字） |
+| `draft` | `string` | | 收尾页草稿，渲染方式同 `report_page` |
 
-整个 run 调一次，算出 `durationMs` 并置终态。
+**交草稿。** 收尾页是人类最先看的那一页；不给草稿，这个 run 就以「一串链接、没有结论」
+收场——这是选择，不是兜底，索引页只能列链接。
 
-## `report_panel`
+给了草稿但渲染失败时，返回 `isError`，但**run 已经关闭**（终态记录已落盘）：
+写不出合法收尾页的 agent 仍然要能结束汇报。
 
-无参数。返回：
+返回 `status`、`durationMs`、`pageCount`、收尾页的 `page` 与 `url`。
 
-```jsonc
-{ "panelUrl": "http://127.0.0.1:7788",
-  "viewUrl": "http://127.0.0.1:7788/#/run/run_20260924062926_8cf29b",
-  "runId": "run_20260924062926_8cf29b",
-  "status": "running",
-  "recordCount": 7,
-  "storage": "/home/you/.report-mcp" }
-```
+## `report_syntax`
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `component` | `string` | | 一个语法主题；缺省 = 组件清单 |
+
+返回的是**渲染器自己的**帮助文本（`am list` / `am help <topic>`），不是我们手抄的第二份规范。
+主题：`format` `code` `image` `theme` 和每个组件名。
 
 ---
 
 ## 返回值里的链接
 
-每个 tool 都带 `panelUrl`（面板根地址）和 `viewUrl`（直指当前 run 的深链）。人类拿到 `viewUrl` 点开即可，不需要再导航。
+`url` 只在有宿主在跑的时候非空。判断方式很土：`$REPORT_MCP_HOME/host.json` 里记着宿主的
+pid，`report_page` 用 `process.kill(pid, 0)` 判活。活的就把它的地址拼成 URL 返回，
+死的返回 `url: null` + 一句 `hint`。
 
-`panelUrl` 可能指向**另一个 agent 进程托管的面板**——同机同存储的多个 report-mcp 进程共享单实例，后来者 attach 到宿主，链接统一指向宿主地址。这是设计行为，不是串号：所有进程写的都是同一份共享 JSONL。
+**页面永远会落盘**，链接只是「现在点得开吗」。宿主起来的那一刻，之前所有页面在同样的
+URL 上立刻可达——URL 由 journal 里的 seq 和 slug 决定，与谁在什么时候服务它无关。
 
-如果链接被挤出上下文，再调一次 `report_panel` 取回来。
+所以 agent 侧不需要常驻进程：MCP server 不监听任何端口、不 spawn 后台进程，
+跟着会话生灭没问题。

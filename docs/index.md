@@ -3,11 +3,11 @@ layout: home
 
 hero:
   name: report-mcp
-  text: agent 向人类汇报
-  tagline: 单向推送进度、状态、日志与结构化成果，落盘为 JSONL，实时呈现在本地面板。不阻塞、不等待、不要人类点确认。
+  text: agent 向人类交汇报
+  tagline: 一个里程碑一页纸。agent 交一份精简草稿，渲染成一页自包含 HTML 落盘，常驻宿主给它一个手机上能点的链接。不阻塞、不等待、不要人类点确认。
   image:
-    src: /report-mcp/images/panel-hero.png
-    alt: report-mcp 面板截图：左侧 run 列表，右侧实时时间线（进度条、日志、状态切换）
+    src: /report-mcp/images/report-page.png
+    alt: report-mcp 渲染出的一页汇报：面板网格里有结论表、流程图和时序图
   actions:
     - theme: brand
       text: 安装
@@ -16,36 +16,40 @@ hero:
       text: 使用方法
       link: /guide/usage
     - theme: alt
-      text: 在线 Demo
-      link: /panel/
+      text: 示例汇报
+      link: /reports/01-cache-selection.html
       target: _blank
 
 features:
-  - title: 单向，不阻塞
-    icon: 🎯
-    details: 所有 tool 都是 fire-and-forget，写完立刻返回。没有挂起的请求、没有超时、没有「人类不在场 agent 就卡死」。
+  - title: 一页一个里程碑
+    icon: 📄
+    details: agent 写 ~600 token 的精简草稿：frontmatter 定模板与主题，`## ` 分面板，flow / sequence / tree / timeline / kv / callout / ask 围栏画图和给结论。版面决定权全在草稿，服务端一个字都不改。
+
+  - title: 页面自包含
+    icon: 📦
+    details: 一页 = 一个 HTML 文件，图 base64 在里面，没有 CDN、没有外链、没有外部字体。拷走单个文件离线也能开，页面还带着自己的草稿原文。
+
+  - title: 托管，链接永久不变
+    icon: 🔗
+    details: report-mcp serve 是唯一的 HTTP 宿主。页面 URL 由 run id + seq + slug 拼出来，immutable 缓存，宿主起来的那一刻历史页面全部立刻可达。
+
+  - title: 手机上能读
+    icon: 📱
+    details: REPORT_MCP_HOST=0.0.0.0 就开到局域网，可点地址自己枚举出来（私网优先）。没有鉴权也没有 TLS，所以默认值是回环，索引页顶部也会挂着这句提醒。
 
   - title: 落盘可审计
     icon: 🧾
-    details: 每条汇报是磁盘上的一行 JSON，append-only。事后可以 diff、可以审计，别的程序一行代码就能读走。
+    details: 草稿和页面都在磁盘上：runs/*.jsonl 一行一条（append-only），pages/<runId>/<seq>-<slug>.html 是渲染结果。tail -f 能看，别的程序一行代码读走。
 
-  - title: 实时面板
-    icon: ⚡
-    details: 文件监听 + SSE，写入到人类看见的典型延迟低于 100ms。跨 run 汇总、筛选、深链分享。
+  - title: 失败是可恢复的
+    icon: 🛠
+    details: 草稿写坏了，返回的是渲染器自己的话：行号、组件名、一个正确示例、am help 指路，一个字不改。改好再调就是新的一页，失败的草稿留在 journal 里，索引页显式列出 pending。
 
-  - title: stdout 纪律
+  - title: 单向，不阻塞
+    icon: 🎯
+    details: 没有挂起的请求、没有超时、没有入站写入口（非 GET/HEAD 一律 405）。页面上的 Reply / Remark 是读者自己粘回来的，不构成回话通道。
+
+  - title: 依赖面很小
     icon: 🔒
-    details: stdio transport 下 stdout 只能有 JSON-RPC，所以所有日志走 stderr。有一条测试专门盯这个。
-
-  - title: 零配置起步
-    icon: 📦
-    details: 面板是 React，但没有框架、没有 dev server、没有 CDN——esbuild 打成 public/panel.js 随包发布，打开即用。
-
-  - title: 手机上也能看
-    icon: 📱
-    details: 设一个环境变量把面板开到局域网，地址自动算好打出来；窄屏下面板重排成抽屉 + 窄条布局，不是把桌面版缩小。
-
-  - title: 同一份代码，两种形态
-    icon: 🔌
-    details: 既有后端就走 REST + SSE 当实时面板；没后端（比如 GitHub Pages）自动切静态 demo，左上角挂 DEMO 角标。
+    details: 运行时两个 npm 依赖（MCP SDK、zod）加一个 vendored 渲染器（MIT，生成物，sha256 门禁）。示例汇报页由真渲染器生成，CI 重新渲染比对——生成不出来就是 vendor 坏了。
 ---

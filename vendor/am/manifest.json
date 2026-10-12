@@ -1,0 +1,12 @@
+{
+  "name": "answer-me-with-html",
+  "version": "0.5.0",
+  "file": "am.mjs",
+  "bytes": 575084,
+  "sha256": "8a52581ca87beeffa19fd5bdb1d8da3cee75ae9ef41e7d7277471c305fd4fa92",
+  "license": "MIT",
+  "source": "https://github.com/QingYunA/answer-me-with-html",
+  "upstreamPath": "skills/answer-me-with-html/scripts/am.mjs",
+  "vendoredAt": "2026-10-10",
+  "node": ">=20"
+}

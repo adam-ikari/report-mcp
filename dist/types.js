@@ -1,14 +1,13 @@
 /**
- * Shared record model.
+ * Record and view models.
  *
- * Everything the agent reports is one of six record kinds. The union is
- * append-only: a run is simply an ordered list of `ReportRecord` lines in a
- * JSONL file.
+ * A run is an append-only list of these records, one JSON line each in
+ * `$REPORT_MCP_HOME/runs/<runId>.jsonl`. Four kinds: the run's header, a draft the
+ * agent submitted, the page that draft became, and the closing record.
+ *
+ * A `milestone` with no matching `published` is a legitimate end state — the draft
+ * was bad, or the renderer was unavailable — and the journal keeps it on purpose:
+ * the agent retries as a new record rather than rewriting history.
  */
-export const EMPTY_LOG_COUNTS = {
-    debug: 0,
-    info: 0,
-    warn: 0,
-    error: 0,
-};
+export {};
 //# sourceMappingURL=types.js.map

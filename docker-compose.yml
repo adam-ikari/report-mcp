@@ -1,44 +1,54 @@
-# report-mcp: the MCP server *and* its panel in one container.
+# report-mcp: the persistent host, in a container.
 #
-# The MCP client spawns this via stdio, so the container is the "agent process":
+# This service does ONE thing: it serves the report pages. It is not the MCP server.
+# The MCP server binds no port and is spawned by the agent's host over stdio, so the
+# two processes meet on the volume, not on a socket:
 #
 #   {
 #     "mcpServers": {
 #       "report": {
 #         "command": "docker",
 #         "args": ["run", "--rm", "-i",
+#                  "--entrypoint", "node",
 #                  "-v", "report-mcp:/data",
-#                  "-e", "REPORT_MCP_HOST=0.0.0.0",
-#                  "report-mcp:latest"]
+#                  "-e", "REPORT_MCP_HOME=/data",
+#                  "report-mcp:latest", "dist/index.js"]
 #       }
 #     }
 #   }
 #
-# -i is mandatory: without it the container gets no stdin and the MCP transport
-# has nothing to speak to. --rm keeps the host free of stopped containers.
+# The `--entrypoint` override is what turns this image back into the MCP server: the
+# image's own ENTRYPOINT is `report-mcp serve`, which is the host, not the transport.
 #
-# The volume is the whole point. REPORT_MCP_HOME is the storage root; mount it
-# and the runs survive `docker rm`, and `docker run` again picks the history back
-# up. Mount a host directory instead if you want to read the JSONL directly.
+# -i is mandatory for the MCP container: without stdin the transport has nothing to
+# speak to. --rm keeps the host free of stopped containers.
+#
+# The volume is the whole point. Pages are written under /data/pages, journals under
+# /data/runs, and /data/host.json tells the agent process which URL to hand back. So an
+# agent session can end, and every page it published stays reachable — as long as this
+# service stays up.
+#
+# One caveat worth knowing: `host.json` liveness is checked with a pid, and pids do not
+# cross PID namespaces. Sharing the volume between containers therefore makes the link
+# *optimistic* — if this service is stopped while an agent container still thinks the
+# recorded pid is alive, the link 404s until the host comes back (the page itself is on
+# the volume, so it opens as soon as `serve` runs again).
 services:
   report-mcp:
     build: .
     image: report-mcp:latest
     container_name: report-mcp
-    # -i keeps stdin open for the MCP client; -t is deliberately NOT set, it
-    # would make the stdio transport non-binary-clean.
-    stdin_open: true
     ports:
-      # The panel, reachable from the LAN. Bind it to 127.0.0.1:7788 on the host
-      # instead if you only want local access.
+      # The reports, reachable from the LAN. Bind "127.0.0.1:7788:7788" instead if
+      # only this machine should read them.
       - "7788:7788"
     environment:
+      REPORT_MCP_HOME: /data
       REPORT_MCP_HOST: 0.0.0.0
       REPORT_MCP_PORT: "7788"
-      # Narrow /api/file to directories you are willing to serve to the LAN.
-      # Unset means any image/markdown/html file an agent reports is fetchable
-      # by anyone who can reach the port.
-      REPORT_MCP_FILE_ROOTS: "/data"
+      # Set this when the address the human types is not the one the container can
+      # discover — a reverse proxy, or a mapped port on a different host name.
+      # REPORT_MCP_PUBLIC_URL: http://reports.lan.example:7788
     volumes:
       - report-mcp:/data
     # The image runs as `node` (uid 1000). A named volume is created root-owned,

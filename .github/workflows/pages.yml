@@ -25,32 +25,32 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      # dist/ and public/panel.js are committed so git installs work without
-      # devDependencies (a global install never gets `tsc` or esbuild). Both
-      # builds are deterministic, so any drift means the source changed without
-      # a rebuild — fail rather than ship a package whose bin runs yesterday's
-      # code, or whose panel is missing.
+      # The renderer is upstream's generated bundle, pinned by sha256. A byte that
+      # changes without the manifest changing is either tampering or a bad upgrade.
+      - name: Vendored renderer must match its manifest
+        run: node scripts/check-vendor.mjs
+      # dist/ is committed so git installs work without devDependencies (a global
+      # install never gets `tsc`). The build is deterministic, so any drift means the
+      # source changed without a rebuild — fail rather than ship a package whose bin
+      # runs yesterday's code.
       - name: Committed build output must match its source
         run: |
-          if [ -n "$(git status --porcelain -- dist public/panel.js public/panel.js.map)" ]; then
-            echo "::error::dist/ or public/panel.js is out of sync with src/ or panel/src. Run 'npm run build' and commit it."
-            git status --porcelain -- dist public/panel.js public/panel.js.map
-            git diff -- dist public/panel.js public/panel.js.map
+          if [ -n "$(git status --porcelain -- dist)" ]; then
+            echo "::error::dist/ is out of sync with src/. Run 'npm run build' and commit it."
+            git status --porcelain -- dist
+            git diff -- dist
             exit 1
           fi
+      # docs/public/reports/ is committed too, and it is the only end-to-end proof that
+      # the vendored renderer still renders: regenerate and compare instead of trusting it.
+      - name: Example reports must match their drafts
+        run: node scripts/render-samples.mjs --check
 
   build:
     needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-
-      # Regenerates public/demo-data.js and copies public/ into
-      # docs/public/panel/ so the demo ships at <site>/panel/. Zero-dependency:
-      # both scripts import only node builtins and local files, so the root
-      # install already done by `test` is not required here.
-      - name: Stage panel demo into the docs site
-        run: npm run docs:stage
 
       - uses: actions/setup-node@v7
         with:
@@ -65,7 +65,7 @@ jobs:
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
-          # VitePress output: docs site at the root, panel demo at /panel/.
+          # VitePress output: docs site at the root, example reports under /reports/.
           path: docs/.vitepress/dist
 
   deploy:

@@ -1,73 +1,65 @@
-import type { EndRecord, ReportRecord, RunStatus, RunSummary, StartRecord } from "./types.js";
-import { EMPTY_LOG_COUNTS } from "./types.js";
+import type { PublishedPage, ReportRecord, RunSummary, StartRecord } from "./types.js";
 
 /**
  * Derive a run's read-only view from its records.
  *
- * Lives in its own module, with no Node imports, because **two runtimes execute
- * it**: the MCP server (reading JSONL off disk) and the optional Cloudflare
- * Worker mirror (reading records out of KV). A second copy would be a second
- * answer to "what is this run's status", which is the exact failure the
- * `RunSummary`-is-never-persisted rule exists to prevent.
- *
- * The panel has a third implementation, `derive()` in panel/src/lib/derive.js —
- * a JavaScript mirror, because the panel cannot import the server's build. That
- * one is guarded by test/render.mjs and test/static.mjs instead, and it derives
- * from raw records too, so all three see the same input and must agree.
+ * Two consumers, one implementation: the MCP process answers `report_*` calls with
+ * it, and `report-mcp serve` renders the index page from it. Persisting any of this
+ * would be a second answer to "what is in this run", which is the failure the
+ * recompute-on-read rule exists to prevent.
  */
 export function summarize(runId: string, records: ReportRecord[]): RunSummary {
   const first = records[0];
   const last = records[records.length - 1];
 
-  const startRecs = records.filter((r): r is StartRecord => r.kind === "start");
-  const start = startRecs[startRecs.length - 1];
-
-  let status: RunStatus = "running";
-  for (const r of records) {
-    if (r.kind === "status") status = r.status;
-    else if (r.kind === "end") status = r.status;
-  }
-
-  const logCounts = { ...EMPTY_LOG_COUNTS };
-  let resultCount = 0;
-  let lastError: string | undefined;
+  let start: StartRecord | undefined;
+  let status: RunSummary["status"] = "running";
+  const published = new Map<number, PublishedPage>();
+  const drafts: { seq: number; title: string; ts: string }[] = [];
   let failureSummary: string | undefined;
-  let progress: RunSummary["progress"];
 
   for (const r of records) {
-    if (r.kind === "log") {
-      logCounts[r.level]++;
-      if (r.level === "error") lastError = r.message;
-    } else if (r.kind === "status" && r.status === "error" && r.message) lastError = r.message;
-    else if (r.kind === "result") resultCount++;
+    if (r.kind === "start") start = r;
     else if (r.kind === "end") {
-      // Keep lastError pointing at the actual error signal; the end summary is
-      // a separate, human-written verdict.
+      status = r.status;
+      // The end summary is a human-written verdict, kept apart from "a page is missing".
       if (r.status !== "done" && r.summary) failureSummary = r.summary;
-    } else if (r.kind === "progress") {
-      progress = {
-        phase: r.phase,
-        percent: r.percent ?? null,
-        step: r.step,
-        totalSteps: r.totalSteps,
-        message: r.message,
-      };
+    } else if (r.kind === "milestone") {
+      drafts.push({ seq: r.seq, title: r.title, ts: r.ts });
+    } else if (r.kind === "published") {
+      published.set(r.for, {
+        // The *milestone's* seq names the file, so it names the URL too. The published
+        // record's own seq is one later and has no path in it.
+        seq: r.for,
+        title: r.title,
+        slug: r.slug,
+        path: r.path,
+        ts: r.ts,
+        bytes: r.bytes,
+        sha256: r.sha256,
+      });
     }
   }
 
-  const end = last?.kind === "end" ? (last as EndRecord) : undefined;
+  const pages = [...published.values()].sort((a, b) => a.seq - b.seq);
+  const rendered = new Set(pages.map((p) => p.seq));
+  const pending = drafts.filter((d) => !rendered.has(d.seq));
+
+  const end = last?.kind === "end" ? last : undefined;
   const startedAt = start?.ts ?? first?.ts;
   const updatedAt = last?.ts;
 
   const summary: RunSummary = {
     runId,
-    title: start?.title ?? "Untitled run",
+    title: start?.title ?? "未命名汇报",
     status,
     startedAt,
     updatedAt,
     recordCount: records.length,
-    logCounts,
-    resultCount,
+    pageCount: pages.length,
+    pages,
+    pending,
+    group: start?.tags?.[0] || start?.agent || "未分组",
   };
   if (start?.agent) summary.agent = start.agent;
   if (start?.tags) summary.tags = start.tags;
@@ -77,8 +69,6 @@ export function summarize(runId: string, records: ReportRecord[]): RunSummary {
   } else if (startedAt) {
     summary.durationMs = Math.max(0, Date.parse(updatedAt ?? startedAt) - Date.parse(startedAt));
   }
-  if (progress) summary.progress = progress;
-  if (lastError) summary.lastError = lastError;
   if (failureSummary) summary.failureSummary = failureSummary;
   return summary;
 }

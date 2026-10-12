@@ -1,7 +1,7 @@
 {
   "name": "report-mcp",
-  "version": "0.3.1",
-  "description": "One-way agent -> human reporting MCP: progress, status, logs and structured results, persisted as JSONL and streamed to a local web panel.",
+  "version": "0.4.0",
+  "description": "Milestone briefing MCP: the agent submits an answer-me-with-html draft, the tool renders it to a self-contained HTML report and a local host serves it as a link.",
   "type": "module",
   "license": "MIT",
   "bin": {
@@ -10,27 +10,23 @@
   "main": "dist/index.js",
   "files": [
     "dist",
-    "public"
+    "vendor"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node panel/build.mjs && node scripts/build-demo.mjs && node scripts/build-worker-assets.mjs",
-    "build:panel": "node panel/build.mjs",
-    "worker:dev": "npm run build && wrangler dev --config worker/wrangler.toml",
-    "worker:deploy": "npm run build && wrangler deploy --config worker/wrangler.toml",
-    "demo": "node scripts/build-demo.mjs",
+    "build": "tsc -p tsconfig.json",
     "watch": "tsc -p tsconfig.json --watch",
-    "watch:panel": "node panel/build.mjs --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node test/run.mjs",
     "start": "node dist/index.js",
-    "docs:stage": "node scripts/stage-panel.mjs",
-    "docs:dev": "npm run docs:stage && npm --prefix docs run dev",
-    "docs:build": "npm run docs:stage && npm --prefix docs run build",
+    "serve": "node dist/index.js serve",
+    "samples": "node scripts/render-samples.mjs",
+    "docs:dev": "npm run samples && npm --prefix docs run dev",
+    "docs:build": "npm run samples && npm --prefix docs run build",
     "docs:preview": "npm --prefix docs run preview",
-    "prepare": "node scripts/build-demo.mjs && node scripts/check-panel-build.mjs"
+    "prepare": "node scripts/check-vendor.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -38,14 +34,6 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "antd": "^6.6.5",
-    "dompurify": "^3.4.16",
-    "esbuild": "^0.28.2",
-    "jsdom": "^30.1.1",
-    "marked": "^15.0.12",
-    "miniflare": "^4.20260730.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
     "typescript": "^5.6.0"
   }
 }
