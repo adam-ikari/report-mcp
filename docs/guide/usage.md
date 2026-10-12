@@ -195,14 +195,14 @@ journal，连失败的草稿都在里面）。
 没问题，run 以未命名建立，补调一次改标题。
 
 **Q：`url` 是 `null`？**
-宿主没在跑。页面已经在 `pages/` 下了，起 `report-mcp serve` 之后所有历史页面在同样的
+宿主没在跑。页面已经在 `pages/` 下了，起宿主（`report-mcp start`，或者前台 `serve`）之后所有历史页面在同样的
 URL 上立刻可达。容器里则检查 `REPORT_MCP_PUBLIC_URL`（pid 判活不跨 PID namespace）。
 
 **Q：人类没反应，agent 会卡住吗？**
 不会。这条通道没有挂起的请求、没有超时、没有入站写入口（非 GET/HEAD 一律 405）。
 
 **Q：能在另一台机器 / 手机上读？**
-同一个局域网：`REPORT_MCP_HOST=0.0.0.0 report-mcp serve`，地址自己算出来（见
+同一个局域网：`report-mcp start --host 0.0.0.0`，地址自己算出来（见
 [安装与接入](./install.md#让手机能打开)）。跨公网请用 `ssh -L`。
 **没有鉴权**这件事不会变好，那些页面是完整的汇报文档，别映射到公网。
 

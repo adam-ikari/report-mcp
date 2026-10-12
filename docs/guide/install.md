@@ -4,7 +4,8 @@ report-mcp 是两个东西共用一个二进制：
 
 ```
 report-mcp           MCP server（stdio）。agent 调它，草稿落盘，页面渲染出来。
-report-mcp serve     只读 HTTP 宿主。人起它，页面就有可点的链接。
+report-mcp serve     只读 HTTP 宿主。人起它，页面就有可点的链接（前台，Ctrl-C 停）。
+report-mcp start     同一个宿主放后台。配套的 stop / status 见「起宿主」。
 ```
 
 ```
@@ -61,7 +62,7 @@ git clone https://github.com/adam-ikari/report-mcp.git
 cd report-mcp
 npm install      # prepare 钩子跑 scripts/check-vendor.mjs，只检查不重建
 npm run build    # 改了 src/ 才需要：tsc → dist/
-npm test         # 7 套
+npm test         # 8 套
 ```
 
 ## 接入 MCP 客户端
@@ -101,6 +102,18 @@ report-mcp serve --port 8080        # 换端口
 REPORT_MCP_HOST=0.0.0.0 report-mcp serve    # 开到局域网
 ```
 
+不想为它腾一个终端，就交给这三条：
+
+```bash
+report-mcp start                    # 后台起同一个 serve，诊断写 $HOME/serve.log
+report-mcp status                   # 在不在跑、哪个地址、home、几次汇报几页
+report-mcp stop                     # 停掉，host.json 一起清
+```
+
+`start` 是幂等的（已在跑就复用同一个 pid），`stop` 也是（没在跑返回成功），
+所以 agent 自己 shell 出去起宿主也行，会话重连一百次不会撞端口。
+`status --json` 是给机器读的，退出码 0/1 就是「在不在跑」。
+
 ```
 [report-mcp] serve    http://127.0.0.1:7788/
 [report-mcp] home     /home/you/.report-mcp
@@ -124,16 +137,30 @@ REPORT_MCP_HOST=0.0.0.0 report-mcp serve    # 开到局域网
 ## 让手机能打开
 
 ```bash
-REPORT_MCP_HOST=0.0.0.0 report-mcp serve
+report-mcp start --host 0.0.0.0     # 或者前台的 REPORT_MCP_HOST=0.0.0.0 report-mcp serve
 ```
 
-地址会自己算出来打出来，不用再 `ip a` 找 IP：
+地址会自己算出来打出来，不用再 `ip a` 找 IP；绑的不是回环时，那句「同网段任何人都能读」
+的警告打在**终端**上，不会跟着 banner 沉进日志：
 
 ```
 [report-mcp] serve    http://192.168.1.57:7788/
 [report-mcp]          http://10.0.4.2:7788/
 [report-mcp]          http://127.0.0.1:7788/
 [report-mcp] 注意      绑的是 0.0.0.0：同网段任何设备都能读这些汇报，没有鉴权也没有 TLS。
+```
+
+（这是前台 `serve` 的 banner。放后台时它写进 `serve.log`，而 `start` 会把同一句警告
+打在终端上：）
+
+```
+✓ 宿主在跑 http://192.168.1.57:7788/ (pid 2415288 · v0.4.0 · 自 2026-10-12T06:53:15Z)
+    备选  http://10.0.4.2:7788/
+    备选  http://127.0.0.1:7788/
+home    /home/you/.report-mcp
+内容    3 次汇报 · 7 页
+日志    /home/you/.report-mcp/serve.log
+注意    这个宿主绑在了 0.0.0.0：同一网段的任何设备都能打开这些汇报，没有鉴权也没有 HTTPS。
 ```
 
 枚举本机非回环网卡的 **IPv4** 地址，**私网地址优先**（192.168 → 10.x → 172.16-31），
@@ -212,8 +239,8 @@ environment:
 |---|---|---|---|
 | `REPORT_MCP_HOME` | `~/.report-mcp` | 两边 | 存储根目录：`runs/`、`pages/`、`am/`、`host.json` |
 | `REPORT_MCP_RUN_ID` | 自动生成 | MCP | 固定 run id，让多个 MCP 实例写进同一次汇报 |
-| `REPORT_MCP_HOST` | `127.0.0.1` | serve | 绑定地址，`0.0.0.0` 见上 |
-| `REPORT_MCP_PORT` | `7788` | serve | 监听端口（`--port` 同义） |
+| `REPORT_MCP_HOST` | `127.0.0.1` | serve / start | 绑定地址，`0.0.0.0` 见上 |
+| `REPORT_MCP_PORT` | `7788` | serve / start | 监听端口（`--port` 同义） |
 | `REPORT_MCP_PUBLIC_URL` | 无 | serve | 对外宣传的地址；容器端口映射、反向代理后面必须设 |
 
 v0.3 的 `REPORT_MCP_FILE_ROOTS` / `MAX_FILE_BYTES` / `REMOTE*` 全部删除：

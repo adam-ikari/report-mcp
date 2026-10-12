@@ -6,6 +6,26 @@
 npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp.git
 ```
 
+## Unreleased
+
+### 新增
+
+- **`report-mcp start` / `stop` / `status`**：宿主的启停不再要一个空终端。`start` spawn
+  的就是同一个 `serve`，诊断放 `$REPORT_MCP_HOME/serve.log`；`stop` 对 `host.json` 里的
+  pid 发 SIGTERM；`status` 回答「在不在跑、哪个地址、几次汇报几页」，`--json` 给 agent，
+  退出码 0/1 就是它的答案。三条都不引入新状态——`host.json` 本来就是 agent 判链接的唯一依据
+- 这三条是**幂等**的：`start` 遇到已在跑的宿主就复用，`stop` 遇到没在跑也返回成功，
+  agent 每次会话各起一次不会撞端口
+- **`stop` 拒绝动不是宿主的 pid**：pid 会被回收。`/proc/<pid>/cmdline` 认不出 `serve` 时
+  直接报错退出，而不是照着记录杀进程（没有 procfs 的平台退化成只判活）
+- 绑 `0.0.0.0` 的警告由 `start` 打在终端上，不会随着 banner 一起沉进日志
+
+### 测试
+
+- 新增 `test/manage.mjs`（24）：三条命令的幂等、pid 被回收时拒绝下手、陈旧记录清掉后能接管、
+  端口被别人占时的失败路径与 `serve.log` 尾巴；`test/serve.mjs` 补一条 SIGTERM 退出会清记录（28）
+- 现在 **186 条断言 / 八套**
+
 ## v0.4.0 · 2026-10-10
 
 **从「实时面板」改成「里程碑汇报」。** agent 交一份精简草稿，工具把它渲染成**一页自包含

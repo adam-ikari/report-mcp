@@ -269,4 +269,4 @@ export function createServer(store: Store): McpServer {
 }
 
 const HOST_HINT =
-  "no report-mcp host is running — the page is on disk; start `report-mcp serve` and every page in this journal becomes reachable at a stable URL";
+  "no report-mcp host is running — the page is on disk; run `report-mcp start` (it returns; `serve` would hold the terminal) and every page in this journal becomes reachable at a stable URL";

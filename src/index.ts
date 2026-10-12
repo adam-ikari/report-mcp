@@ -8,6 +8,9 @@
  *                       reports down with it.
  *   report-mcp serve    the hosting side: a read-only HTTP server over that same
  *                       directory, run by a human (or by Docker) and left running.
+ *   report-mcp start    same thing, in the background: spawn `serve` detached, its
+ *                       diagnostics to $HOME/serve.log. `stop` and `status` finish
+ *                       the pair, so nobody has to own a terminal to read reports.
  *
  * stdout is reserved for MCP JSON-RPC in the first mode — every diagnostic goes to
  * stderr, in both.
@@ -18,6 +21,7 @@ import { Store } from "./store.js";
 import { startHost } from "./host.js";
 import { createServer } from "./server.js";
 import { nodeSupportsAm } from "./render.js";
+import { ANSI, NO_COLOR, describe, startHostProcess, status, stopHostProcess } from "./manage.js";
 
 const VERSION = "0.4.0";
 const DEFAULT_PORT = 7788;
@@ -27,13 +31,16 @@ const USAGE = [
   "",
   "用法：",
   "  report-mcp                MCP server（stdio）。不监听端口，随会话生灭。",
-  "  report-mcp serve          常驻只读宿主，索引页 + /r/ 页面。人手动起、或者 Docker 起。",
+  "  report-mcp serve          常驻只读宿主，索引页 + /r/ 页面。前台跑，Ctrl-C 停。",
+  "  report-mcp start          把同一个宿主放到后台（日志写 $HOME/serve.log）。",
+  "  report-mcp stop           停掉后台宿主。没在跑也算成功（幂等，agent 可以放心调）。",
+  "  report-mcp status         宿主在不在跑、地址、home、页数。--json 给 agent 读。",
   "  report-mcp --version      打印版本后退出。",
   "",
   "环境变量：",
   "  REPORT_MCP_HOME            存储根目录（默认 ~/.report-mcp）",
-  "  REPORT_MCP_PORT            serve 监听端口（默认 7788）",
-  "  REPORT_MCP_HOST            serve 绑定地址（默认 127.0.0.1；0.0.0.0 = 同网段都能读，",
+  "  REPORT_MCP_PORT            serve/start 监听端口（默认 7788）",
+  "  REPORT_MCP_HOST            serve/start 绑定地址（默认 127.0.0.1；0.0.0.0 = 同网段都能读，",
   "                             无鉴权无 TLS —— 那些页面是完整的汇报文档）",
   "  REPORT_MCP_PUBLIC_URL      对外宣传的地址（容器内端口映射时地址自动发现不可用，用这个）",
   "  REPORT_MCP_RUN_ID          多个 MCP 进程共用一个 run",
@@ -49,14 +56,20 @@ function flag(args: string[], name: string): string | undefined {
   return arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : args[i + 1];
 }
 
-async function serve(args: string[]): Promise<void> {
+/** Where to bind and which home, resolved the same way for `serve` and `start`. */
+function bind(args: string[]): { store: Store; host: string; port: number } {
   const store = new Store();
   const host = flag(args, "host") ?? process.env.REPORT_MCP_HOST?.trim() ?? "127.0.0.1";
   const port = Number(flag(args, "port") ?? process.env.REPORT_MCP_PORT ?? DEFAULT_PORT);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    console.error(`[report-mcp] serve  invalid port: ${String(port)}`);
+    console.error(`[report-mcp] invalid port: ${String(port)}`);
     process.exit(2);
   }
+  return { store, host, port };
+}
+
+async function serve(args: string[]): Promise<void> {
+  const { store, host, port } = bind(args);
 
   let server;
   try {
@@ -106,6 +119,57 @@ async function serve(args: string[]): Promise<void> {
   process.on("SIGTERM", () => void shutdown(0));
 }
 
+/**
+ * `start` / `stop` / `status`. These talk to the same `host.json` the MCP side
+ * reads, so there is exactly one notion of "is a host serving this home" — and
+ * the LAN warning cannot hide in a log file: whoever asked for 0.0.0.0 sees it.
+ */
+async function manage(cmd: string, args: string[]): Promise<void> {
+  const { store, host, port } = bind(args);
+  const opts = { host, port, version: VERSION };
+  const palette = process.stdout.isTTY && !args.includes("--json") ? ANSI : NO_COLOR;
+
+  if (cmd === "start") {
+    let s: Awaited<ReturnType<typeof startHostProcess>>;
+    try {
+      s = await startHostProcess(store, opts);
+    } catch (err) {
+      // A host that died on the way up left its reason in serve.log, not on this
+      // terminal; without the tail, "起不来" is the only thing a human has to go on.
+      const e = err as Error & { logTail?: string };
+      console.error(`${palette.red}✗ 起不来${palette.off}：${e.message}`);
+      if (e.logTail) console.error(`${palette.dim}serve.log${palette.off}  ${e.logTail.split("\n").slice(-4).join("\n")}`);
+      console.error(`${palette.dim}home${palette.off}    ${store.home}`);
+      process.exit(3);
+    }
+    process.stdout.write(`${describe(s, opts, palette)}\n`);
+    return;
+  }
+
+  if (cmd === "stop") {
+    let r: Awaited<ReturnType<typeof stopHostProcess>>;
+    try {
+      r = await stopHostProcess(store);
+    } catch (err) {
+      // Including "this pid is not mine". Killing a recycled pid would be the one
+      // way this tool damages something it has no claim on, so it refuses out loud.
+      console.error(`${palette.red}✗ 没停${palette.off}：${(err as Error).message}`);
+      console.error(`${palette.dim}记录${palette.off}    ${store.hostPath}`);
+      process.exit(3);
+    }
+    if (args.includes("--json")) process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
+    else if (r.stopped) process.stdout.write(`${palette.green}✓${palette.off} 已停止（pid ${r.pid}），页面还在磁盘上\n`);
+    else process.stdout.write(`${palette.dim}·${palette.off} 本来就没在跑\n`);
+    return;
+  }
+
+  const s = await status(store);
+  if (args.includes("--json")) process.stdout.write(`${JSON.stringify(s, null, 2)}\n`);
+  else process.stdout.write(`${describe(s, opts, palette)}\n`);
+  // status is a question: exit 0 running, 1 not. Same shape as `systemctl is-active`.
+  process.exit(s.running ? 0 : 1);
+}
+
 async function mcp(): Promise<void> {
   if (!nodeSupportsAm()) {
     // The renderer is one file that needs Node 20+; without it every report_page
@@ -148,7 +212,7 @@ async function mcp(): Promise<void> {
   if (host) {
     console.error(`[report-mcp] host     ${host.url}  (pid ${host.pid} · ${host.urls.length} address(es))`);
   } else {
-    console.error("[report-mcp] host     未运行 —— 页面照写，链接要等 `report-mcp serve` 起来才有");
+    console.error("[report-mcp] host     未运行 —— 页面照写，链接要等 `report-mcp start`（或 serve）起来才有");
   }
 
   await server.connect(transport);
@@ -166,6 +230,10 @@ async function main(): Promise<void> {
   }
   if (args[0] === "serve") {
     await serve(args);
+    return;
+  }
+  if (args[0] === "start" || args[0] === "stop" || args[0] === "status") {
+    await manage(args[0], args.slice(1));
     return;
   }
   await mcp();

@@ -16,6 +16,7 @@
  *   milestone.mjs     the whole path: tool → journal → renderer → serve → fetched page
  *   host.mjs          routing and the security edges of `serve`
  *   serve.mjs         `serve` as a process: host.json, bind-or-die, address ordering
+ *   manage.mjs        `start`/`stop`/`status`: idempotence, a recycled pid, a held port
  *   e2e.mjs           two MCP processes on one run id, plus a writer killed mid-run
  */
 import { spawn } from "node:child_process";
@@ -26,7 +27,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = path.join(here, "..", "dist", "index.js");
 
-const SUITES = ["vendor.mjs", "am-smoke.mjs", "render-error.mjs", "milestone.mjs", "host.mjs", "serve.mjs", "e2e.mjs"];
+const SUITES = ["vendor.mjs", "am-smoke.mjs", "render-error.mjs", "milestone.mjs", "host.mjs", "serve.mjs", "manage.mjs", "e2e.mjs"];
 
 function run(file) {
   return new Promise((resolve) => {

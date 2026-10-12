@@ -107,7 +107,15 @@ failure: draft
 
 ## 宿主
 
-`report-mcp serve` 是唯一的 HTTP 入口，默认 `127.0.0.1:7788`，只读（非 GET/HEAD 一律 405）。
+`report-mcp serve` 是唯一的 HTTP 入口，默认 `127.0.0.1:7788`，只读（非 GET/HEAD 一律 405）。不想为它开一个终端，就用三条命令管它的生命周期：
+
+```bash
+report-mcp start              # 后台起 serve，诊断写 $REPORT_MCP_HOME/serve.log
+report-mcp status             # 在不在跑、地址、home、几次汇报几页；--json 给 agent
+report-mcp stop               # 停掉；没在跑也算成功
+```
+
+三条都不引入新状态：`start` spawn 的就是同一个 `serve`，pid 记在 `host.json` 里（agent 侧读的也是它），`stop` 对着那个 pid 发 SIGTERM。`start` 幂等——agent 每次会话都调一次也不会撞端口。`status` 的退出码回答「在不在跑」（0/1）。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -145,6 +153,21 @@ report-mcp serve --host 0.0.0.0
 
 **无鉴权，而且后果比旧版直观**：`0.0.0.0` 现在意味着同一网段任何设备都能读到一份份**完整的汇报文档**。别把它映射到公网；要收紧就回到回环 + `ssh -L 7788:127.0.0.1:7788 host`。
 
+放后台不会把这条警告塞进日志里藏起来——`start` 把它打在终端上：
+
+```bash
+report-mcp start --host 0.0.0.0
+```
+
+```
+✓ 宿主在跑 http://192.168.1.57:7788/ (pid 2415288 · v0.4.0 · 自 2026-10-12T06:53:15Z)
+    备选  http://10.0.4.12:7788/
+home    /home/adam/.report-mcp
+内容    3 次汇报 · 7 页
+日志    /home/adam/.report-mcp/serve.log
+注意    这个宿主绑在了 0.0.0.0：同一网段的任何设备都能打开这些汇报，没有鉴权也没有 HTTPS。
+```
+
 容器里 pid 判活跨不过 namespace（`Dockerfile` 的 `ENTRYPOINT` 就是 `serve`），这时给 agent 侧设 `REPORT_MCP_PUBLIC_URL`，链接照拼。
 
 ## 接入
@@ -179,18 +202,19 @@ report-mcp --version    # report-mcp 0.4.0
 ```bash
 npm install
 npm run build       # tsc → dist/
-npm test            # 构建 + 七套测试（161 条断言）
+npm test            # 构建 + 八套测试（186 条断言）
 npm run typecheck
 node dist/index.js serve --port 7789   # 本地起宿主
 ```
 
 ```
 src/
-  index.ts      入口分派：MCP / serve / --version / --help
+  index.ts      入口分派：MCP / serve / start / stop / status / --version / --help
   server.ts     四个 tool 的 zod schema 与 handler
   store.ts      RunWriter(锁 + append/seq 同步) + Store(路径/列表) + host.json
   render.ts     一次 spawn：草稿进、页面出、错误原样带回
   host.ts       serve：路由、索引页、地址枚举、响应头
+  manage.ts     start/stop/status：spawn 宿主、按 host.json 的 pid 收摊
   summarize.ts  从记录重算 RunSummary
   types.ts      四种记录的判别联合
 vendor/am/      am.mjs + LICENSE + manifest.json + README.md（生成物，sha 门禁）
@@ -198,7 +222,7 @@ examples/       三份真草稿 → docs/public/reports/
 scripts/        update-am.mjs / check-vendor.mjs / render-samples.mjs
 docs/           VitePress 文档站（独立 package.json）
 Dockerfile / docker-compose.yml   常驻宿主
-test/           run.mjs 编排 + 七套
+test/           run.mjs 编排 + 八套
 ```
 
 测试套件、vendor 升版、CI 门禁、Pages 发布链路，见 [docs/contributing.md](docs/contributing.md)。

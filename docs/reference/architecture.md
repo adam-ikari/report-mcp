@@ -41,6 +41,16 @@ agent 进程在 publish 时读这个文件 + `process.kill(pid, 0)` 判活：活
 代价写在 `docker-compose.yml` 里：pid 判活不跨 PID namespace，容器里 agent 看不到宿主机
 进程的 pid，得用 `REPORT_MCP_PUBLIC_URL` 显式给地址。
 
+**`start` / `stop` / `status` 是 `serve` 的壳，不是守护进程。** 让人为一个小工具腾出一个
+终端是多余的摩擦，所以 `start` 把同一个 `serve` spawn 成后台进程、诊断写 `serve.log`，
+然后等 `host.json` 出现——那个文件本来就是「宿主在跑」的唯一定义，就绪信号用它已经够了，
+不需要再加一层 pidfile、心跳或 socket。`stop` 读同一个文件里的 pid 发 SIGTERM，
+`serve` 收到就自己关自己、自己清记录（这条退出路径由 `test/serve.mjs` 钉，命令面由
+`test/manage.mjs` 钉）。唯一的净新增是 `stop` 前认一次
+`/proc/<pid>/cmdline`：pid 会被回收，照着一条陈旧记录杀进程是这个命令唯一能造成的
+真实损害，认不出来就拒绝动手（没有 procfs 的平台退化成只判活，这条在测试里也钉着）。
+`start` 幂等，因为 agent 也会用它——每次会话起一次，不能因为上一次还在跑就报失败。
+
 **拼 URL 就是一个函数，不是一层接口。** `pageIndexUrl(store)` 读 host.json，
 `pageUrl(store, ref)` 把 `pages/<runId>/<seq>-<slug>.html` 换成 `/r/<runId>/<seq>-<slug>`。
 v0.4 只有一种托管形态，所以没有 `HostAdapter`、没有 `REPORT_MCP_HOST_ADAPTER`：
@@ -185,8 +195,8 @@ MCP 启动时在 stderr 上先警告一句。npm 依赖仍然只有 MCP SDK 和 
 
 **为什么是「一页一里程碑」而不是实时时间线。** 人读汇报要的是结论，不是滚动日志。
 v0.3 那套 SSE + 面板把工程投在「让人盯着看」上，而真实需求是「三小时后我能看懂发生了什么」。
-代价很实在：删掉 231 条面板 DOM 断言，等于删掉大半个测试资产；补回来的 161 条里，
-`test/host.mjs` / `test/serve.mjs` / `test/milestone.mjs` 占 98 条，盯的是路由、
+代价很实在：删掉 231 条面板 DOM 断言，等于删掉大半个测试资产；补回来的 186 条里，
+`milestone` / `host` / `serve` / `manage` 占 123 条，盯的是路由、
 安全头和 URL 稳定性，不再盯任何布局。
 
 **为什么服务端不改写草稿、不注入 frontmatter、不拼模板。** 这是「照 am」这句话的实际含义。

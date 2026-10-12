@@ -73,7 +73,7 @@ try {
   await c2.rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "serve", version: "0" } });
   c2.notify("notifications/initialized", {});
   const orphan = await c2.call("report_page", { title: "Orphan", slug: "two", draft: sheetDraft("Orphan") });
-  check("a dead pid in host.json means url:null", orphan.ok === true && orphan.url === null && /report-mcp serve/.test(orphan.hint || ""), JSON.stringify(orphan).slice(0, 140));
+  check("a dead pid in host.json means url:null", orphan.ok === true && orphan.url === null && /report-mcp start/.test(orphan.hint || ""), JSON.stringify(orphan).slice(0, 140));
   check("the page is still written", fs.existsSync(path.join(dead, orphan.page)), orphan.page);
   c2.close();
 
@@ -114,6 +114,7 @@ try {
   const back = await startServe({ home: HOME, port: await freePort() });
   check("the same page is reachable after a restart", (await fetch(`${back.origin}/r/${start.runId}/2-one`)).ok);
   await back.stop("SIGTERM");
+  check("a SIGTERM'd host clears host.json on the way out", !fs.existsSync(statePath));
 
   // --- the address an operator says is reachable wins ---
   const pubPort = await freePort();

@@ -5,9 +5,10 @@
 ```bash
 npm install           # prepare 跑 scripts/check-vendor.mjs，只检查 vendor，不重建
 npm run build         # tsc → dist/
-npm test              # 构建 + 七套测试
+npm test              # 构建 + 八套测试
 npm run typecheck     # tsc --noEmit
 npm run serve         # 起宿主，看 dist/ 跑起来是什么样
+node dist/index.js start --port 7789   # 同一个宿主，放后台（stop / status 配套）
 npm run samples       # examples/*.md → docs/public/reports/
 ```
 
@@ -38,7 +39,7 @@ node scripts/render-samples.mjs   # 示例页必须还能从草稿生成出来
 
 ## 测试矩阵
 
-`npm test` 覆盖 **161 条断言，分七套**（`test/run.mjs` 顺序跑，`stdio: "inherit"`）：
+`npm test` 覆盖 **186 条断言，分八套**（`test/run.mjs` 顺序跑，`stdio: "inherit"`）：
 
 | 套件 | 断言 | 验证什么 |
 |---|---|---|
@@ -47,7 +48,8 @@ node scripts/render-samples.mjs   # 示例页必须还能从草稿生成出来
 | `test/render-error.mjs` | 15 | 失败路径：坏草稿 → `isError` 带行号与正确示例、草稿仍落盘、重试是新 seq、收尾页失败也照样关闭 run |
 | `test/milestone.mjs` | 41 | **主 e2e**：`report_start` → `report_page` → journal 顺序 → 起 `serve` → 历史页面立刻可达 → 页面内容与响应头 → 索引页 → `report_end` 收尾页 → stdout 纯度 |
 | `test/host.mjs` | 30 | 路由与安全：路径穿越、符号链接逃逸、405、无 CORS 头、`X-Frame-Options`、`/api/*` 仅回环、gzip、索引分组与时间戳格式 |
-| `test/serve.mjs` | 27 | 宿主生命周期：`host.json` 写与 pid-guarded 清、bind-or-die 的三种提示、陈旧 host 记录 → `url: null`、`REPORT_MCP_PUBLIC_URL`、地址枚举顺序、`parsePageRoute` 的正反例 |
+| `test/serve.mjs` | 28 | 宿主生命周期：`host.json` 写与 pid-guarded 清、bind-or-die 的三种提示、陈旧 host 记录 → `url: null`、`REPORT_MCP_PUBLIC_URL`、地址枚举顺序、`parsePageRoute` 的正反例 |
+| `test/manage.mjs` | 24 | `start` / `stop` / `status`：幂等、宿主 pid 与 `serve.log`、发布中的页面真的点得开、pid 被回收时拒绝发信号、端口被占时把宿主的原文带出来 |
 | `test/e2e.mjs` | 17 | **多进程共享一个 run**：两个真实 server 进程交错写（seq 无重号无断档、无撕裂行）、双写者被 SIGKILL 后重启续号、派生 summary 与索引页 |
 
 共享测试件在 `test/harness.mjs`：MCP stdio 客户端（含 boot 行解析）、`startServe`、
@@ -74,6 +76,7 @@ src/
   server.ts     4 个 tool 的 zod schema 与 handler；publish 顺序（journal first）
   render.ts     spawn vendored am：AM_HOME 隔离、超时、输出截断、错误原文透传
   host.ts       serve 的路由、索引页模板、URL 拼接、地址枚举、响应头
+  manage.ts     start/stop/status：spawn 宿主、按 host.json 的 pid 收摊、认进程再发信号
   store.ts      RunWriter(append + seq + 锁) / 页面路径 / host.json 读写 / listRuns
   summarize.ts  派生 RunSummary，索引页与 /api/runs 共用
   types.ts      四种记录的判别联合 + RunSummary
@@ -87,7 +90,7 @@ docs/public/reports/    渲染出的示例页，**入库**，CI 重新生成并�
 Dockerfile              两段：build（只有 tsc）→ runtime（dist + vendor），ENTRYPOINT 是 serve
 docker-compose.yml      常驻宿主 + 一个共享 volume 的 MCP 客户端示例
 docs/                   VitePress 文档站（独立 package.json）
-test/                   七套，见上面的矩阵
+test/                   八套，见上面的矩阵
 .github/workflows/pages.yml   测试 + vendor 门禁 + 两道漂移门禁 → 构建站点 → 部署 Pages
 ```
 

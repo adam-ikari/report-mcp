@@ -59,7 +59,7 @@ try {
     tags: ["infra", "e2e"],
   });
   check("report_start seq 1", start.ok && start.seq === 1, JSON.stringify(start).slice(0, 120));
-  check("no host → indexUrl is null", start.indexUrl === null && /report-mcp serve/.test(start.hint || ""), String(start.hint).slice(0, 60));
+  check("no host → indexUrl is null", start.indexUrl === null && /report-mcp start/.test(start.hint || ""), String(start.hint).slice(0, 60));
 
   const page1 = await call("report_page", { title: "Cache selection", draft: sheetDraft("Cache selection") });
   check("report_page ok", page1.ok === true, JSON.stringify(page1).slice(0, 200));
