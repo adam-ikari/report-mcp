@@ -73,11 +73,14 @@ v0.3.1 从未发布到 npm，这一版**不做兼容**：没有旧 tool 的别�
 - **索引页的时间戳不再跟着服务器的 locale 走**：`toLocaleString()` 在 `LANG` 未设时打出
   `10/10/2026, 2:36:38 PM`——中文页面上的一串英文格式。现在是固定 `YYYY-MM-DD HH:MM`，
   与 am 盖在每页页脚的时间同形
+- **`report_end` 的返回与 `report_page` 同形**：收尾页也带 `bytes`/`sha256`/`render`/`am`。
+  它手里已经有那份 `PublishResult`，之前却拼了个更瘦的 JSON，调用方得按工具名分支才能拿到
+  页面指纹。手机上的那次实跑就是分支走进了缺字段的一边，才发现的
 
 ### 测试
 
-- **432 条断言 / 10 套 → 160 条 / 7 套**。删掉的 231 条几乎全是面板 DOM 断言
-- 新增 `test/milestone.mjs`（40，主 e2e：草稿 → 页面 → journal 顺序 → 宿主 → 链接 → 索引页）、
+- **432 条断言 / 10 套 → 161 条 / 7 套**。删掉的 231 条几乎全是面板 DOM 断言
+- 新增 `test/milestone.mjs`（41，主 e2e：草稿 → 页面 → journal 顺序 → 宿主 → 链接 → 索引页）、
   `test/host.mjs`（30，路由与安全）、`test/serve.mjs`（27，宿主生命周期与 bind-or-die）、
   `test/render-error.mjs`（15，失败路径）、`test/am-smoke.mjs`（20，渲染器 CLI 契约）、
   `test/vendor.mjs`（11，vendor 完整性）

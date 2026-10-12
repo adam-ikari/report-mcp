@@ -200,14 +200,14 @@ export function createServer(store: Store): McpServer {
       try {
         const w = await store.writerFor();
 
-        let page: { seq: number; ref: string } | null = null;
+        let page: Extract<PublishResult, { ok: true }> | null = null;
         let renderError: string | null = null;
         if (draft?.trim()) {
           const run = await store.readRun(store.runId);
           // A fixed slug: the title is the run's, which is usually not ASCII, and the
           // closing page should have a URL a human can type from memory.
           const res = await publish(`${run?.summary.title ?? "汇报"} · 收尾`, draft, "close");
-          if (res.ok) page = { seq: res.seq, ref: res.ref };
+          if (res.ok) page = res;
           else renderError = `closing page failed to render (${res.failure}):\n${res.error}`;
         }
 
@@ -228,7 +228,15 @@ export function createServer(store: Store): McpServer {
           durationMs: body.durationMs ?? null,
           pageCount: (await store.readRun(store.runId))?.summary.pageCount ?? 0,
           page: page?.ref,
-          ...(page ? published(page.ref) : { indexUrl: pageIndexUrl(store) }),
+          ...(page
+            ? {
+                bytes: page.bytes,
+                sha256: page.sha256,
+                render: page.report || undefined,
+                am: amVersion(),
+                ...published(page.ref),
+              }
+            : { indexUrl: pageIndexUrl(store) }),
         });
       } catch (err) {
         return fail(err);

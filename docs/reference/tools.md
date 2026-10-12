@@ -116,7 +116,9 @@ Gateway -> *Redis: 命中?
 给了草稿但渲染失败时，返回 `isError`，但**run 已经关闭**（终态记录已落盘）：
 写不出合法收尾页的 agent 仍然要能结束汇报。
 
-返回 `status`、`durationMs`、`pageCount`、收尾页的 `page` 与 `url`。
+返回 `status`、`durationMs`、`pageCount`，加上收尾页那一组字段——与 `report_page` 成功时
+同形（`page`、`bytes`、`sha256`、`render`、`am`、`url` / `indexUrl`）。没给草稿就少这一组，
+其余照旧。
 
 ## `report_syntax`
 

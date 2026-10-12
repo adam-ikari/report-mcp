@@ -119,6 +119,11 @@ try {
   const end = await call("report_end", { status: "done", summary: "landed", draft: closingDraft("Wrap-up") });
   check("report_end closes with a page", end.ok && end.status === "done" && typeof end.durationMs === "number" && /\/6-close$/.test(String(end.url)), JSON.stringify(end).slice(0, 160));
   check("report_end counts the pages", end.pageCount === 3, String(end.pageCount));
+  check(
+    "the closing reply describes its page the way report_page does",
+    typeof end.bytes === "number" && /^[0-9a-f]{64}$/.test(String(end.sha256)) && !!end.am,
+    JSON.stringify({ bytes: end.bytes, sha256: String(end.sha256).slice(0, 12), am: end.am }),
+  );
 
   const after = journal(runId);
   check("journal ends with the end record", after[after.length - 1].kind === "end" && after.length === 8, after.map((r) => `${r.kind}#${r.seq}`).join(","));

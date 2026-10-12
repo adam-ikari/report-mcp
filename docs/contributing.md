@@ -38,14 +38,14 @@ node scripts/render-samples.mjs   # 示例页必须还能从草稿生成出来
 
 ## 测试矩阵
 
-`npm test` 覆盖 **160 条断言，分七套**（`test/run.mjs` 顺序跑，`stdio: "inherit"`）：
+`npm test` 覆盖 **161 条断言，分七套**（`test/run.mjs` 顺序跑，`stdio: "inherit"`）：
 
 | 套件 | 断言 | 验证什么 |
 |---|---|---|
 | `test/vendor.mjs` | 11 | vendor 完整性：sha256 / 版本 / 文件头 / `AM_HOME` 隔离 / 不起 update 子进程 |
 | `test/am-smoke.mjs` | 20 | **渲染器 CLI 契约**：spawn 真 am，断言 argv、stdin、`-o`、页面自包含的负向断言、坏草稿的失败形状 |
 | `test/render-error.mjs` | 15 | 失败路径：坏草稿 → `isError` 带行号与正确示例、草稿仍落盘、重试是新 seq、收尾页失败也照样关闭 run |
-| `test/milestone.mjs` | 40 | **主 e2e**：`report_start` → `report_page` → journal 顺序 → 起 `serve` → 历史页面立刻可达 → 页面内容与响应头 → 索引页 → `report_end` 收尾页 → stdout 纯度 |
+| `test/milestone.mjs` | 41 | **主 e2e**：`report_start` → `report_page` → journal 顺序 → 起 `serve` → 历史页面立刻可达 → 页面内容与响应头 → 索引页 → `report_end` 收尾页 → stdout 纯度 |
 | `test/host.mjs` | 30 | 路由与安全：路径穿越、符号链接逃逸、405、无 CORS 头、`X-Frame-Options`、`/api/*` 仅回环、gzip、索引分组与时间戳格式 |
 | `test/serve.mjs` | 27 | 宿主生命周期：`host.json` 写与 pid-guarded 清、bind-or-die 的三种提示、陈旧 host 记录 → `url: null`、`REPORT_MCP_PUBLIC_URL`、地址枚举顺序、`parsePageRoute` 的正反例 |
 | `test/e2e.mjs` | 17 | **多进程共享一个 run**：两个真实 server 进程交错写（seq 无重号无断档、无撕裂行）、双写者被 SIGKILL 后重启续号、派生 summary 与索引页 |

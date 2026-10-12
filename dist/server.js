@@ -177,7 +177,7 @@ export function createServer(store) {
                 // closing page should have a URL a human can type from memory.
                 const res = await publish(`${run?.summary.title ?? "汇报"} · 收尾`, draft, "close");
                 if (res.ok)
-                    page = { seq: res.seq, ref: res.ref };
+                    page = res;
                 else
                     renderError = `closing page failed to render (${res.failure}):\n${res.error}`;
             }
@@ -199,7 +199,15 @@ export function createServer(store) {
                 durationMs: body.durationMs ?? null,
                 pageCount: (await store.readRun(store.runId))?.summary.pageCount ?? 0,
                 page: page?.ref,
-                ...(page ? published(page.ref) : { indexUrl: pageIndexUrl(store) }),
+                ...(page
+                    ? {
+                        bytes: page.bytes,
+                        sha256: page.sha256,
+                        render: page.report || undefined,
+                        am: amVersion(),
+                        ...published(page.ref),
+                    }
+                    : { indexUrl: pageIndexUrl(store) }),
             });
         }
         catch (err) {

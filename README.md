@@ -179,7 +179,7 @@ report-mcp --version    # report-mcp 0.4.0
 ```bash
 npm install
 npm run build       # tsc → dist/
-npm test            # 构建 + 七套测试（160 条断言）
+npm test            # 构建 + 七套测试（161 条断言）
 npm run typecheck
 node dist/index.js serve --port 7789   # 本地起宿主
 ```
