@@ -147,6 +147,21 @@ try {
 
   const one = await rpc("tools/call", { name: "report_syntax", arguments: { component: "flow" } });
   check("report_syntax names fences on the way fences are named", !one.isError && /```flow/.test(one.content[0].text), String(one.content[0].text).split("\n")[0]);
+
+  // `style` is the one topic the renderer does not answer. The prose rules live in this
+  // repo, so they are a constant here — and the same constant goes into the report_page
+  // description, which is what makes the two impossible to drift apart.
+  const style = await rpc("tools/call", { name: "report_syntax", arguments: { component: "style" } });
+  const styleText = String(style.content?.[0]?.text || "");
+  check("report_syntax style is the prose rules, not a renderer error", !style.isError && /首句就是事实/.test(styleText) && /——/.test(styleText), styleText.split("\n")[1]);
+  check("report_syntax style names what it forbids", /感叹号/.test(styleText) && /「我们」/.test(styleText));
+
+  const pageTool = tools.tools.find((t) => t.name === "report_page");
+  check(
+    "the prose rules ship inside report_page, so no agent has to ask for them",
+    (pageTool.description.match(/首句就是事实/g) || []).length === 1 && /自检：跟仓库自己的 CHANGELOG 对读/.test(pageTool.description),
+    `description is ${pageTool.description.length} chars`,
+  );
 } catch (err) {
   check("no exception", false, String(err && err.stack ? err.stack : err));
 } finally {

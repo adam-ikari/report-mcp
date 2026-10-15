@@ -28,7 +28,28 @@ const DRAFT_HELP = [
     "  images: ![caption](/absolute/path.png) — the file is embedded, so the page stays one self-contained file (<= 5 MB)",
     "  a relative src= or image path resolves against the MCP server's working directory, i.e. the project you are working in",
     "  a page keeps its own draft and has Reply/Remark buttons: the reader's comments come back as one Markdown message for them to paste to you.",
-    'Full syntax for one component: report_syntax with component="flow" (or format|code|image|ask|theme).',
+    'Full syntax for one component: report_syntax with component="flow" (or format|code|image|ask|theme); component="style" repeats the prose rules below.',
+].join("\n");
+/**
+ * The prose standard for every page this tool publishes, in the author's own voice
+ * rules. It is in the tool description rather than only the docs because the agent
+ * writes the draft from the description: a rule it has to go fetch is a rule it skips.
+ * `report_syntax {component:"style"}` returns this same constant — one copy, no drift.
+ */
+const STYLE_RULES = [
+    "",
+    "Prose rules (中文正文按这套写，仓库作者本人的 voice 规范):",
+    "  1 首句就是事实：机制、变更、坏在哪。不做铺垫、不设问、不写「你是否还在为…发愁」。",
+    "  2 用「——」追一句修正或后果：先断言，破折号后面是让它成立的那件事。",
+    "  3 点名具体的东西：文件路径、命令、HTTP 状态码、字节数、commit sha。能套在任何项目上的句子等于没说。",
+    "  4 错误用陈述句承认（「此前遗漏」「实测 18.2.11 是误读」）。修正是信息，不是道歉。",
+    "  5 取舍写成因果，不写成口号。",
+    "  6 术语留在英文（fail-closed、deny、Streamable HTTP），只翻译它周围的句子。",
+    "  7 短句，一句一条因果链。",
+    "  不要：凑三件套（首先/其次/最后、「三个关键价值」）、隔一条就加粗、not-X-but-Y 反差句、结尾复述段意、",
+    "  每个分句一个破折号、销售词（强大、无缝、革命性、极致、彻底）、「我们」（写「仓库」「宿主」或省主语）、",
+    "  感叹号（一个都不要）、diagram 节点标签以外的 emoji。",
+    "  自检：跟仓库自己的 CHANGELOG 对读，比它更「精致」就是写错了。读者已知的从句全删。",
 ].join("\n");
 export function createServer(store) {
     const server = new McpServer({ name: "report-mcp", version: "0.4.0" });
@@ -107,6 +128,7 @@ export function createServer(store) {
         description: "Publish one milestone as a single readable HTML page. Call it when something worth reading is " +
             "finished — a conclusion, a comparison, a plan, a deliverable — not for log lines.\n\n" +
             DRAFT_HELP +
+            STYLE_RULES +
             "\n\nThis call blocks on one render and can fail: a draft error comes back as the renderer's own " +
             "report with the line number, so fix the draft and call again. The draft is journalled either way.",
         inputSchema: {
@@ -160,7 +182,7 @@ export function createServer(store) {
         title: "End the report",
         description: "Close the run; `status` is the verdict shown on the index page. Pass a draft and it is published " +
             "as the closing page — do write one, it is the page the human reads first, and without it the run " +
-            "ends as a list of links with no conclusion. Same draft format as report_page.",
+            "ends as a list of links with no conclusion. Same draft format and same prose rules as report_page.",
         inputSchema: {
             status: z.enum(END_STATUSES).optional().describe('Terminal status, default "done".'),
             summary: z.string().max(4000).optional().describe("One-paragraph wrap-up."),
@@ -218,11 +240,15 @@ export function createServer(store) {
         title: "Look up draft syntax",
         description: "Return the renderer's own syntax reference: the component list with no argument, or full syntax " +
             "for one topic (flow, sequence, er, tree, timeline, limits, annot, kv, callout, ask, code, image, " +
-            "format, theme). Read it before inventing a fence — a wrong component costs a failed render.",
+            "format, theme). `style` is the one topic that is ours rather than the renderer's: the prose rules " +
+            "every page is written to. Read this before inventing a fence — a wrong component costs a failed render.",
         inputSchema: {
             component: z.string().min(1).max(24).optional().describe("One syntax topic. Omit for the component list."),
         },
     }, async ({ component }) => {
+        if (component?.toLowerCase() === "style") {
+            return { content: [{ type: "text", text: STYLE_RULES.trim() + "\n" }] };
+        }
         const res = await amSyntax(component);
         return {
             content: [{ type: "text", text: res.text || "(no output)" }],

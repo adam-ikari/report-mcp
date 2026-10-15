@@ -96,7 +96,9 @@ Gateway -> *Redis: 命中?
 - 图片 `![说明](/绝对路径.png)` 会被嵌进页面，页面仍是单文件（≤5 MB）；相对 `src=` 与相对图片路径按 **MCP server 进程的 cwd** 解析，也就是 agent 干活的那个项目目录
 - 页面自带草稿原文和 Reply / Remark 按钮，读者的批注汇成一段 Markdown 由**他自己**粘回来——这不是回话通道
 
-完整语法用 `report_syntax` 取，别凭记忆编围栏名字。
+完整语法用 `report_syntax` 取，别凭记忆编围栏名字。正文的写作规范随 `report_page` 的
+description 一起送到 agent 手上，也可单独查（见下面 `report_syntax`）。
+
 
 ::: tip 参考页
 本仓库 `examples/` 下有三份真草稿，渲染结果就是文档站「示例汇报」那三页。
@@ -126,8 +128,13 @@ Gateway -> *Redis: 命中?
 |---|---|---|---|
 | `component` | `string` | | 一个语法主题；缺省 = 组件清单 |
 
-返回的是**渲染器自己的**帮助文本（`am list` / `am help <topic>`），不是我们手抄的第二份规范。
+返回的是**渲染器自己的**帮助文本（`am list` / `am help <topic>`），不是手抄的第二份规范。
 主题：`format` `code` `image` `theme` 和每个组件名。
+
+`style` 是唯一的例外——它答的不是渲染器，是这个仓库：正文的写作规范（首句给事实、`——` 追修正、
+点名具体物、错误用陈述句承认、术语留英文、禁感叹号与销售词）。别跟 frontmatter 里的 `style` 混，
+那一个是 am 的 STE 检查等级（`off|80|strict`）。同一份常量也拼在 `report_page` 的 description
+里，所以 agent 不查也能看到；查一次是为了在写长草稿时对照，两个来源不会漂。
 
 ---
 
