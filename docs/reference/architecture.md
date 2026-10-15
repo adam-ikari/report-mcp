@@ -51,6 +51,19 @@ agent 进程在 publish 时读这个文件 + `process.kill(pid, 0)` 判活：活
 真实损害，认不出来就拒绝动手（没有 procfs 的平台退化成只判活，这条在测试里也钉着）。
 `start` 幂等，因为 agent 也会用它——每次会话起一次，不能因为上一次还在跑就报失败。
 
+**单实例的范围是这台机器，不是一个 home。** `host.json` 按 home 存放，天生只能回答
+「谁在服务这个 home」；换个 `REPORT_MCP_HOME` 就看不见别的宿主，于是同一台机器上可以悄悄
+攒出两三个宿主、两份索引页、两套互不相认的链接。`serve` 监听从成功后因此再写一条机器级登记：
+`$XDG_STATE_HOME/report-mcp/hosts/<pid>-<port>.json`。`start` 先查它——有活宿主且调用方
+**没有**显式给 `--port`，就拒绝（退出码 4：不是起不来，是已经有了）；显式给了端口，那就按
+字面意思理解，放行第二个实例。清理借用 `stop` 早就需要的同一招：pid 判活 +
+`/proc/<pid>/cmdline` 认亲，认不出来的记录直接删。没有 `clean` 子命令，也没有 TTL——
+登记表是缓存，不是真相，journal 才是。
+
+代价写在同一处：容器的 state 目录在镜像里，不在共享 volume 上，所以「一台机器」在容器语境下
+就是「一个容器」。跨 PID namespace 时 pid 判活本来就不可信（见上面 `host.json` 那段），
+把登记表放进共享 volume 只会让一个容器对另一个容器的进程发信号。
+
 **拼 URL 就是一个函数，不是一层接口。** `pageIndexUrl(store)` 读 host.json，
 `pageUrl(store, ref)` 把 `pages/<runId>/<seq>-<slug>.html` 换成 `/r/<runId>/<seq>-<slug>`。
 v0.4 只有一种托管形态，所以没有 `HostAdapter`、没有 `REPORT_MCP_HOST_ADAPTER`：
@@ -90,6 +103,10 @@ journal 故意留着它——agent 重试是一条新记录，而不是改写历
       6-close.html
   am/                                 渲染器自己的家（AM_HOME），0700
   host.json                           {url, urls, pid, home, startedAt, version}
+  serve.log                           start 起的后台宿主的诊断（stderr 原样落这里）
+
+~/.local/state/report-mcp/hosts/      XDG_STATE_HOME
+  4112-7788.json                      机器级宿主登记：start 用它拒绝起第二个实例
 ```
 
 `seq` 的唯一性靠那个锁目录：`mkdir` 是原子的，临界区罩住「量文件尾巴 → 定 seq → append」。
@@ -125,7 +142,7 @@ spawn(node, [vendor/am/am.mjs, "render", "-", "--no-open", "-o", <abs outPath>])
 
 失败时 `message` 是 am 的原文，一行不改。那段话里有行号、组件名、一个正确示例和
 `am help <component>` 的指路——它就是 agent 的修复指令，改写它会丢信息。
-agent 一次就能改对，这比我们自己校验草稿格式便宜得多。
+agent 一次就能改对，比自己写一遍草稿校验器便宜得多。
 
 **顺序是 journal-first**：先 append 草稿，再渲染，成功才 append `published`。
 渲染失败不丢工作，重试只是新 seq。
@@ -195,13 +212,13 @@ MCP 启动时在 stderr 上先警告一句。npm 依赖仍然只有 MCP SDK 和 
 
 **为什么是「一页一里程碑」而不是实时时间线。** 人读汇报要的是结论，不是滚动日志。
 v0.3 那套 SSE + 面板把工程投在「让人盯着看」上，而真实需求是「三小时后我能看懂发生了什么」。
-代价很实在：删掉 231 条面板 DOM 断言，等于删掉大半个测试资产；补回来的 186 条里，
+代价很实在：删掉 231 条面板 DOM 断言，等于删掉大半个测试资产；补回来的 202 条里，
 `milestone` / `host` / `serve` / `manage` 占 123 条，盯的是路由、
 安全头和 URL 稳定性，不再盯任何布局。
 
 **为什么服务端不改写草稿、不注入 frontmatter、不拼模板。** 这是「照 am」这句话的实际含义。
-一旦服务端补一个字段，版面决定权就回到了我们手里，草稿作者不再对最终页面负责，
-而我们对布局的判断远不如那套渲染器。所以 `report_page` 只做三件事：落盘、spawn、给链接。
+一旦服务端补一个字段，版面决定权就回到了宿主手里，草稿作者不再对最终页面负责，
+而宿主对布局的判断远不如那套渲染器。所以 `report_page` 只做三件事：落盘、spawn、给链接。
 
 **`report_page` 会阻塞，这是明说的。** 它同步等一次渲染（典型 0.2–1 s），并且可能失败。
 v0.3 的叙事是「所有 tool 永不阻塞」，那一版成立是因为写一行 JSON 真的不会失败。
@@ -236,7 +253,7 @@ HTTPS」。收紧靠回环默认值 + `ssh -L 7788:127.0.0.1:7788 host`，上游
 
 ## 局限
 
-- **并发 append 靠一个锁目录，不是靠原子写。** `<run>.jsonl.lock`（`mkdir` 在所有我们关心的
+- **并发 append 靠一个锁目录，不是靠原子写。** `<run>.jsonl.lock`（`mkdir` 在这套代码支持的
   文件系统上是原子的）罩住「量文件尾巴 → 定 seq → append」这段临界区，等待预算 2 秒；
   等不到就**降级为无锁 append**——宁可在极端争用下撞号，也不让一次汇报调用挂掉或报错。
   锁目录超过 2 秒视为死锁残留，会被下一个写者接管。`test/e2e.mjs` 覆盖两个真实进程交错写
@@ -250,7 +267,7 @@ HTTPS」。收紧靠回环默认值 + `ssh -L 7788:127.0.0.1:7788 host`，上游
   这个 run 就留下一堆 `pending` 草稿——索引页会把它们显式列出来，不藏。
 - **窄屏上表格和图不缩。** 版面归渲染器，而它在 ≤760px 时只把面板收成单列，表格单元格仍
   是 `min-width: 8em`、SVG 仍是 `max-width: none`——一张四列表在 390px 手机上约 500px 宽，
-  要横着推。这是上游的决定，vendor 由 sha 钉死，我们不 fork 它来改。能改的是草稿：
+  要横着推。这是上游的决定，vendor 由 sha 钉死，不 fork 它来改。能改的是草稿：
   给手机读的页面把表压到三列以内（[使用方法](/guide/usage#知道人会用手机读)）。
 - **局域网暴露无鉴权、无 TLS。** `REPORT_MCP_HOST=0.0.0.0` 之后同网段任何设备都能读全部
   页面；DHCP 换址会让历史链接失效。链接即凭证。

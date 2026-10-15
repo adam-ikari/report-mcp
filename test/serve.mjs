@@ -51,6 +51,12 @@ try {
   check("host.json records the live host", st.pid === host.proc.pid && st.url === host.origin && st.home === HOME && st.version === "0.4.0", JSON.stringify(st).slice(0, 120));
   check("host.json carries every advertised address", Array.isArray(st.urls) && st.urls[0] === host.origin);
 
+  // The machine-wide registry is what makes `start` refuse a second host in a second
+  // home. It is written by the same code path as host.json, so it is checked here.
+  const regDir = path.join(HOME, ".state", "report-mcp", "hosts");
+  const regFile = () => path.join(regDir, `${host.proc.pid}-${port}.json`);
+  check("a listening host registers itself beyond its own home", fs.existsSync(regFile()), JSON.stringify(fs.existsSync(regDir) ? fs.readdirSync(regDir) : "(no registry)"));
+
   // An agent in the same home must build a link from that file, not from a guess.
   const c = await connectMcp({ ...process.env, REPORT_MCP_HOME: HOME });
   await c.rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "serve", version: "0" } });
@@ -104,6 +110,7 @@ try {
   // --- SIGKILL leaves the file, and the pid check is what saves it ---
   await host.stop("SIGKILL");
   check("a killed host leaves host.json behind", fs.existsSync(statePath));
+  check("and a killed host leaves its registry entry behind too", fs.existsSync(regFile()));
   const c3 = await connectMcp({ ...process.env, REPORT_MCP_HOME: HOME });
   await c3.rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "serve", version: "0" } });
   c3.notify("notifications/initialized", {});
@@ -115,6 +122,7 @@ try {
   check("the same page is reachable after a restart", (await fetch(`${back.origin}/r/${start.runId}/2-one`)).ok);
   await back.stop("SIGTERM");
   check("a SIGTERM'd host clears host.json on the way out", !fs.existsSync(statePath));
+  check("and clears its registry entry", !fs.existsSync(path.join(regDir, `${back.proc.pid}-${back.port}.json`)));
 
   // --- the address an operator says is reachable wins ---
   const pubPort = await freePort();

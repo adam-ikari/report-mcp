@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { LAN_WARNING } from "./host.js";
+import { registeredHosts, removeHost } from "./registry.js";
 /**
  * `start` / `stop` / `status`: a human or an agent turning the one HTTP host for
  * this home on and off without owning a terminal for it.
@@ -12,6 +13,9 @@ import { LAN_WARNING } from "./host.js";
  * written after the listen succeeds and cleared on exit. That file is the whole
  * supervision protocol — `stop` reads the pid out of it and sends SIGTERM, which
  * is the signal `serve` already shuts down on.
+ *
+ * `start` also reads the machine-wide registry (`src/registry.ts`), because one host
+ * per *home* would still let a second home quietly take a second port.
  */
 const SELF = path.join(path.dirname(fileURLToPath(import.meta.url)), "index.js");
 function alive(pid) {
@@ -58,12 +62,37 @@ function liveHost(store) {
         return null;
     return { pid: h.pid, url: h.url };
 }
+/**
+ * Live hosts serving some *other* home on this machine. Entries whose pid is gone,
+ * or is now some unrelated process, are deleted here rather than left to accumulate.
+ */
+function otherHosts(store) {
+    const out = [];
+    for (const h of registeredHosts()) {
+        if (!alive(h.pid) || !isServe(h.pid)) {
+            removeHost(h);
+            continue;
+        }
+        if (h.home === store.home)
+            continue;
+        out.push(h);
+    }
+    return out.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+}
 export async function startHostProcess(store, opts) {
     const log = path.join(store.home, "serve.log");
     // Idempotent: an agent that starts the host on every session must not fail
     // because a session already did it.
     if (liveHost(store))
         return status(store);
+    // One instance per machine, unless a port was named. A second host nobody asked
+    // for means two indexes, two sets of links, and no way to tell which one a page
+    // was published against.
+    const others = otherHosts(store);
+    if (others.length && !opts.explicitPort) {
+        const who = others.map((h) => `${h.url}（home ${h.home}，pid ${h.pid}）`).join("、");
+        throw Object.assign(new Error(`这台机器上已经有宿主在跑：${who}。start 只起一个实例——先停掉它（report-mcp stop --all），确实要第二个就显式给 --port`), { conflict: others });
+    }
     const child = spawn(process.execPath, [SELF, "serve", "--host", opts.host, "--port", String(opts.port)], {
         detached: true,
         stdio: ["ignore", fs.openSync(log, "a"), fs.openSync(log, "a")],
@@ -114,23 +143,32 @@ function tail(file, bytes = 1200) {
     }
     return text.slice(-bytes).trim();
 }
-export async function stopHostProcess(store) {
+export async function stopHostProcess(store, all = false) {
     const h = store.readHostState();
-    if (!h || !alive(h.pid))
-        return { stopped: false };
-    if (!isServe(h.pid)) {
+    if (h && alive(h.pid) && !isServe(h.pid)) {
         throw Object.assign(new Error(`pid ${h.pid} 在跑，但它不是这个 home 的 report-mcp serve —— 不动它`), { stale: true });
     }
-    process.kill(h.pid, "SIGTERM");
-    const gone = await settled(5000, async () => (alive(h.pid) ? null : true));
+    // `--all` is the way out of the refusal in `start`: the other host belongs to a
+    // different home, so this command has to reach it by pid, not by `host.json`.
+    const also = all ? otherHosts(store) : [];
+    const target = h && alive(h.pid) ? { pid: h.pid } : null;
+    if (!target && !also.length)
+        return { stopped: false };
+    if (target)
+        process.kill(target.pid, "SIGTERM");
+    for (const other of also)
+        process.kill(other.pid, "SIGTERM");
+    const lingering = [target?.pid, ...also.map((o) => o.pid)].filter((p) => typeof p === "number");
+    const gone = await settled(5000, async () => (lingering.some((pid) => alive(pid)) ? null : true));
     if (!gone)
-        throw new Error(`pid ${h.pid} 收到 SIGTERM 后 5s 内没退出`);
-    return { stopped: true, pid: h.pid };
+        throw new Error(`pid ${lingering.join(", ")} 收到 SIGTERM 后 5s 内没退出`);
+    return { stopped: true, pid: target?.pid, also: also.map((o) => o.pid) };
 }
 export async function status(store) {
     const h = store.readHostState();
     const running = !!h && alive(h.pid);
-    const out = { running, home: store.home, log: path.join(store.home, "serve.log") };
+    const others = otherHosts(store).map((o) => ({ url: o.url, home: o.home, pid: o.pid }));
+    const out = { running, home: store.home, log: path.join(store.home, "serve.log"), ...(others.length ? { others } : {}) };
     if (!h || !running)
         return out;
     const runs = await store.listRuns(60);
@@ -156,11 +194,13 @@ export const ANSI = {
 export const NO_COLOR = { off: "", bold: "", dim: "", green: "", red: "", yellow: "" };
 /** Human-readable, one line per fact; `--json` is there for agents. */
 export function describe(s, opts, a = ANSI) {
+    const others = (s.others ?? []).map((o) => `    另有宿主 ${o.url} ${a.dim}(home ${o.home} · pid ${o.pid})${a.off}`);
     if (!s.running) {
         const bind = opts.host === "127.0.0.1" ? "" : ` --host ${opts.host} --port ${opts.port}`;
         return [
             `${a.red}✗${a.off} 宿主未运行`,
             `${a.dim}home${a.off}    ${s.home}`,
+            ...(others.length ? [...others, `   ${a.dim}start 会拒绝再起一个（同端口只一个实例），除非显式 --port${a.off}`] : []),
             `   起一个：${a.bold}report-mcp start${a.off}${bind}`,
         ].join("\n");
     }
@@ -173,6 +213,7 @@ export function describe(s, opts, a = ANSI) {
         `${a.dim}home${a.off}    ${s.home}`,
         `${a.dim}内容${a.off}    ${s.runs} 次汇报 · ${s.pages} 页`,
         `${a.dim}日志${a.off}    ${s.log}`,
+        ...others,
         ...(wild ? [`${a.yellow}注意${a.off}    ${LAN_WARNING}`] : []),
     ].join("\n");
 }

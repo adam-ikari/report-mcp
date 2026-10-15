@@ -107,7 +107,7 @@ REPORT_MCP_HOST=0.0.0.0 report-mcp serve    # 开到局域网
 ```bash
 report-mcp start                    # 后台起同一个 serve，诊断写 $HOME/serve.log
 report-mcp status                   # 在不在跑、哪个地址、home、几次汇报几页
-report-mcp stop                     # 停掉，host.json 一起清
+report-mcp stop                     # 停掉，host.json 与登记表一起清；--all 连别的 home 的宿主
 ```
 
 `start` 是幂等的（已在跑就复用同一个 pid），`stop` 也是（没在跑返回成功），
@@ -132,7 +132,20 @@ report-mcp stop                     # 停掉，host.json 一起清
 
 如果 `host.json` 里没有活的宿主记录，提示会改成「占用端口的不是本 home 的 report-mcp」，
 并给出换端口或者 `REPORT_MCP_PUBLIC_URL` 的办法。**没有 attach、没有接管、没有选举**：
-一个 home 一个宿主，撞了就退。
+撞了就退。
+
+`start` 还多管一层：一台机器一个宿主。`serve` 监听从成功后往
+`$XDG_STATE_HOME/report-mcp/hosts/` 记一条，所以换一个 home 也悄悄起不出第二个：
+
+```
+· 没有起新的宿主：这台机器上已经有宿主在跑：http://127.0.0.1:7788（home /home/you/.report-mcp，
+pid 4112）。start 只起一个实例——先停掉它（report-mcp stop --all），确实要第二个就显式给 --port
+home    /home/you/.report-mcp-lan
+```
+
+退出码 **4**，与 3 的「起不来」分开：这里什么都没坏，只是这台机器已经有了它要起的那个宿主。
+显式 `--port` 就是「我确实要第二个」，登记表不再拦。死掉的登记（pid 没了，或者那个 pid
+已经被别的进程占去）由下一个读到它的命令删掉，不需要谁来 `clean`。
 
 ## 让手机能打开
 
@@ -240,8 +253,9 @@ environment:
 | `REPORT_MCP_HOME` | `~/.report-mcp` | 两边 | 存储根目录：`runs/`、`pages/`、`am/`、`host.json` |
 | `REPORT_MCP_RUN_ID` | 自动生成 | MCP | 固定 run id，让多个 MCP 实例写进同一次汇报 |
 | `REPORT_MCP_HOST` | `127.0.0.1` | serve / start | 绑定地址，`0.0.0.0` 见上 |
-| `REPORT_MCP_PORT` | `7788` | serve / start | 监听端口（`--port` 同义） |
+| `REPORT_MCP_PORT` | `7788` | serve / start | 监听端口（`--port` 同义）。给 `start` 显式设 = 「我承认这台机器上还要第二个宿主」 |
 | `REPORT_MCP_PUBLIC_URL` | 无 | serve | 对外宣传的地址；容器端口映射、反向代理后面必须设 |
+| `XDG_STATE_HOME` | `~/.local/state` | serve / start | 宿主登记表落在 `report-mcp/hosts/`。容器各自一个宿主时指到各自的可写目录 |
 
 v0.3 的 `REPORT_MCP_FILE_ROOTS` / `MAX_FILE_BYTES` / `REMOTE*` 全部删除：
 `/api/file` 没了（页面只从 `pages/` 下拼出来的路径读），Worker 镜像没了。

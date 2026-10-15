@@ -6,6 +6,7 @@ import zlib from "node:zlib";
 
 import type { Store } from "./store.js";
 import type { RunSummary } from "./types.js";
+import { registerHost, unregisterHost } from "./registry.js";
 
 /**
  * The hosting side: the one HTTP server that serves report pages
@@ -376,8 +377,19 @@ export async function startHost(store: Store, opts: HostOptions): Promise<Host> 
   const override = process.env.REPORT_MCP_PUBLIC_URL?.trim().replace(/\/+$/, "");
   const urls = override ? [override, ...discovered.filter((u) => u !== override)] : discovered;
 
+  // Both announcements are pid-guarded and idempotent: `close()` and the `exit`
+  // handler can each run, and a SIGKILL runs neither — which is why every reader
+  // checks the pid instead of trusting the file.
+  const startedAt = new Date().toISOString();
+  const registration = { pid: process.pid, port, host: opts.host, url: urls[0], home: store.home, startedAt, version: opts.version };
+  const retire = (): void => {
+    store.clearHostState();
+    unregisterHost(registration.pid, registration.port);
+  };
+
   store.writeHostState(urls[0], urls, opts.version);
-  process.on("exit", () => store.clearHostState());
+  registerHost(registration);
+  process.on("exit", retire);
 
   return {
     url: urls[0],
@@ -385,7 +397,7 @@ export async function startHost(store: Store, opts: HostOptions): Promise<Host> 
     port,
     close() {
       return new Promise<void>((resolve) => {
-        store.clearHostState();
+        retire();
         server.close(() => resolve());
       });
     },

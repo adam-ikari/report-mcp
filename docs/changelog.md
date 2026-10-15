@@ -13,18 +13,42 @@ npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp
 - **`report-mcp start` / `stop` / `status`**：宿主的启停不再要一个空终端。`start` spawn
   的就是同一个 `serve`，诊断放 `$REPORT_MCP_HOME/serve.log`；`stop` 对 `host.json` 里的
   pid 发 SIGTERM；`status` 回答「在不在跑、哪个地址、几次汇报几页」，`--json` 给 agent，
-  退出码 0/1 就是它的答案。三条都不引入新状态——`host.json` 本来就是 agent 判链接的唯一依据
+  退出码 0/1 就是它的答案。链接的判定依据没变：还是 `host.json`，命令面没有第二套真相
 - 这三条是**幂等**的：`start` 遇到已在跑的宿主就复用，`stop` 遇到没在跑也返回成功，
   agent 每次会话各起一次不会撞端口
 - **`stop` 拒绝动不是宿主的 pid**：pid 会被回收。`/proc/<pid>/cmdline` 认不出 `serve` 时
   直接报错退出，而不是照着记录杀进程（没有 procfs 的平台退化成只判活）
 - 绑 `0.0.0.0` 的警告由 `start` 打在终端上，不会随着 banner 一起沉进日志
+- **`start` 在一台机器上只放一个宿主，跨 home 也认。** `host.json` 按 home 存放，看不见
+  别的 home 的宿主，于是换个 `REPORT_MCP_HOME` 就能悄悄攒出两份索引页、两套互不相认的链接。
+  `serve` 监听从成功后再写一条机器级登记 `$XDG_STATE_HOME/report-mcp/hosts/<pid>-<port>.json`，
+  `start` 查到活宿主且调用方没显式给 `--port` 就**拒绝**（退出码 4，区别于 3 的「起不来」），
+  报出对方的地址与 home；`stop --all` 一次停干净。显式 `--port` 按字面意思放行第二个实例。
+  死登记（pid 没了或 pid 已被别的进程占去）由下一个读到它的命令删除，没有 `clean` 子命令
+- **汇报正文的写作规范进了工具面。** `src/server.ts` 的 `STYLE_RULES` 一份常量同时拼进
+  `report_page` 的 description，并作为 `report_syntax {component:"style"}` 返回——agent 不查
+  也能看到，写长草稿时对照一次即可。规则：首句就是事实、`——` 后面放让那句成立的东西、
+  点名具体物（路径 / 命令 / 状态码 / 字节数 / sha）、错误用陈述句承认、取舍写成因果、
+  术语留英文；禁三件套、隔条加粗、not-X-but-Y、结尾复述、销售词、「我们」、感叹号
+- `report_syntax` 的 `style` 与 am 的 frontmatter `style`（STE 检查等级 `off|80|strict`）
+  不是一回事，`docs/reference/tools.md` 把这两个写在一起免得混
+
+### 变更
+
+- `examples/` 三份草稿按上面这套重写开头：`这一页回答一个问题：…` /
+  `这一页说清楚三件事：…` 这类元叙述删掉，首句直接给数据和结论；正文里的「我们」一并清掉
+- 宿主未运行时的 `hint` 从「跑 `report-mcp serve`」改成 `report-mcp start`——agent 照着
+  提示 spawn 前台宿主会占住自己的一次工具调用直到超时
 
 ### 测试
 
-- 新增 `test/manage.mjs`（24）：三条命令的幂等、pid 被回收时拒绝下手、陈旧记录清掉后能接管、
-  端口被别人占时的失败路径与 `serve.log` 尾巴；`test/serve.mjs` 补一条 SIGTERM 退出会清记录（28）
-- 现在 **186 条断言 / 八套**
+- 新增 `test/manage.mjs`（34）：三条命令的幂等、pid 被回收时拒绝下手、陈旧记录清掉后能接管、
+  端口被别人占时的失败路径与 `serve.log` 尾巴、**跨 home 的第二个 `start` 被拒绝（4）而显式
+  `--port` 放行**、`stop --all` 打到别的 home 的 pid、死登记被下一个读者清掉；
+  `test/serve.mjs` 补 SIGTERM 退出清 `host.json` 与登记、SIGKILL 两者都留（31）
+- `test/milestone.mjs`（44）补两条：`report_syntax style` 返回的是规范而不是渲染器的错误，
+  以及规范确实出现在 `report_page` 的 description 里（同一段出现不止一次就红）
+- 现在 **202 条断言 / 八套**
 
 ## v0.4.0 · 2026-10-10
 

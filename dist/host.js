@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import zlib from "node:zlib";
+import { registerHost, unregisterHost } from "./registry.js";
 /**
  * The hosting side: the one HTTP server that serves report pages
  * (`report-mcp serve`), and the two functions the MCP process uses to turn a
@@ -338,15 +339,25 @@ export async function startHost(store, opts) {
     // cannot open; the override is how the operator says "the reachable address is this".
     const override = process.env.REPORT_MCP_PUBLIC_URL?.trim().replace(/\/+$/, "");
     const urls = override ? [override, ...discovered.filter((u) => u !== override)] : discovered;
+    // Both announcements are pid-guarded and idempotent: `close()` and the `exit`
+    // handler can each run, and a SIGKILL runs neither — which is why every reader
+    // checks the pid instead of trusting the file.
+    const startedAt = new Date().toISOString();
+    const registration = { pid: process.pid, port, host: opts.host, url: urls[0], home: store.home, startedAt, version: opts.version };
+    const retire = () => {
+        store.clearHostState();
+        unregisterHost(registration.pid, registration.port);
+    };
     store.writeHostState(urls[0], urls, opts.version);
-    process.on("exit", () => store.clearHostState());
+    registerHost(registration);
+    process.on("exit", retire);
     return {
         url: urls[0],
         urls,
         port,
         close() {
             return new Promise((resolve) => {
-                store.clearHostState();
+                retire();
                 server.close(() => resolve());
             });
         },

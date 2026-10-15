@@ -11,6 +11,8 @@
  *   report-mcp start    same thing, in the background: spawn `serve` detached, its
  *                       diagnostics to $HOME/serve.log. `stop` and `status` finish
  *                       the pair, so nobody has to own a terminal to read reports.
+ *                       One instance per machine: a live host registered by another
+ *                       home makes this refuse, unless a port was named.
  *
  * stdout is reserved for MCP JSON-RPC in the first mode — every diagnostic goes to
  * stderr, in both.
@@ -32,8 +34,10 @@ const USAGE = [
   "用法：",
   "  report-mcp                MCP server（stdio）。不监听端口，随会话生灭。",
   "  report-mcp serve          常驻只读宿主，索引页 + /r/ 页面。前台跑，Ctrl-C 停。",
-  "  report-mcp start          把同一个宿主放到后台（日志写 $HOME/serve.log）。",
+  "  report-mcp start          把同一个宿主放到后台（日志写 $HOME/serve.log）。一台机器只一个",
+  "                            实例：别的 home 已有活宿主就拒绝（退出码 4），除非显式 --port。",
   "  report-mcp stop           停掉后台宿主。没在跑也算成功（幂等，agent 可以放心调）。",
+  "                            --all 连别的 home 的宿主一起停。",
   "  report-mcp status         宿主在不在跑、地址、home、页数。--json 给 agent 读。",
   "  report-mcp --version      打印版本后退出。",
   "",
@@ -44,6 +48,8 @@ const USAGE = [
   "                             无鉴权无 TLS —— 那些页面是完整的汇报文档）",
   "  REPORT_MCP_PUBLIC_URL      对外宣传的地址（容器内端口映射时地址自动发现不可用，用这个）",
   "  REPORT_MCP_RUN_ID          多个 MCP 进程共用一个 run",
+  "  XDG_STATE_HOME             宿主登记表目录（默认 ~/.local/state）；容器里每个 home 各起一个",
+  "                             宿主时指到各自的可写目录，否则 start 会看见别人的实例",
   "",
   "工具：report_start, report_page, report_end, report_syntax",
   "",
@@ -57,15 +63,20 @@ function flag(args: string[], name: string): string | undefined {
 }
 
 /** Where to bind and which home, resolved the same way for `serve` and `start`. */
-function bind(args: string[]): { store: Store; host: string; port: number } {
+function bind(args: string[]): { store: Store; host: string; port: number; explicitPort: boolean } {
   const store = new Store();
   const host = flag(args, "host") ?? process.env.REPORT_MCP_HOST?.trim() ?? "127.0.0.1";
-  const port = Number(flag(args, "port") ?? process.env.REPORT_MCP_PORT ?? DEFAULT_PORT);
+  const portFlag = flag(args, "port");
+  const envPort = process.env.REPORT_MCP_PORT?.trim();
+  const port = Number(portFlag ?? envPort ?? DEFAULT_PORT);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     console.error(`[report-mcp] invalid port: ${String(port)}`);
     process.exit(2);
   }
-  return { store, host, port };
+  // A named port is a request for *this* port, so a host already sitting on another
+  // one is not the caller's problem — `start` only refuses when nobody said.
+  const explicitPort = portFlag !== undefined || Boolean(envPort);
+  return { store, host, port, explicitPort };
 }
 
 async function serve(args: string[]): Promise<void> {
@@ -125,8 +136,8 @@ async function serve(args: string[]): Promise<void> {
  * the LAN warning cannot hide in a log file: whoever asked for 0.0.0.0 sees it.
  */
 async function manage(cmd: string, args: string[]): Promise<void> {
-  const { store, host, port } = bind(args);
-  const opts = { host, port, version: VERSION };
+  const { store, host, port, explicitPort } = bind(args);
+  const opts = { host, port, version: VERSION, explicitPort };
   const palette = process.stdout.isTTY && !args.includes("--json") ? ANSI : NO_COLOR;
 
   if (cmd === "start") {
@@ -136,7 +147,14 @@ async function manage(cmd: string, args: string[]): Promise<void> {
     } catch (err) {
       // A host that died on the way up left its reason in serve.log, not on this
       // terminal; without the tail, "起不来" is the only thing a human has to go on.
-      const e = err as Error & { logTail?: string };
+      const e = err as Error & { logTail?: string; conflict?: unknown[] };
+      if (e.conflict) {
+        // Exit 4, not 3: nothing failed to start — the machine already has the one
+        // instance this command promises.
+        console.error(`${palette.yellow}·${palette.off} 没有起新的宿主：${e.message}`);
+        console.error(`${palette.dim}home${palette.off}    ${store.home}`);
+        process.exit(4);
+      }
       console.error(`${palette.red}✗ 起不来${palette.off}：${e.message}`);
       if (e.logTail) console.error(`${palette.dim}serve.log${palette.off}  ${e.logTail.split("\n").slice(-4).join("\n")}`);
       console.error(`${palette.dim}home${palette.off}    ${store.home}`);
@@ -149,7 +167,7 @@ async function manage(cmd: string, args: string[]): Promise<void> {
   if (cmd === "stop") {
     let r: Awaited<ReturnType<typeof stopHostProcess>>;
     try {
-      r = await stopHostProcess(store);
+      r = await stopHostProcess(store, args.includes("--all"));
     } catch (err) {
       // Including "this pid is not mine". Killing a recycled pid would be the one
       // way this tool damages something it has no claim on, so it refuses out loud.
@@ -158,8 +176,10 @@ async function manage(cmd: string, args: string[]): Promise<void> {
       process.exit(3);
     }
     if (args.includes("--json")) process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
-    else if (r.stopped) process.stdout.write(`${palette.green}✓${palette.off} 已停止（pid ${r.pid}），页面还在磁盘上\n`);
-    else process.stdout.write(`${palette.dim}·${palette.off} 本来就没在跑\n`);
+    else if (r.stopped) {
+      const also = r.also?.length ? `，另有 ${r.also.length} 个别的 home 的宿主（pid ${r.also.join(", ")}）` : "";
+      process.stdout.write(`${palette.green}✓${palette.off} 已停止（pid ${r.pid ?? "—"}）${also}，页面还在磁盘上\n`);
+    } else process.stdout.write(`${palette.dim}·${palette.off} 本来就没在跑\n`);
     return;
   }
 

@@ -39,17 +39,17 @@ node scripts/render-samples.mjs   # 示例页必须还能从草稿生成出来
 
 ## 测试矩阵
 
-`npm test` 覆盖 **186 条断言，分八套**（`test/run.mjs` 顺序跑，`stdio: "inherit"`）：
+`npm test` 覆盖 **202 条断言，分八套**（`test/run.mjs` 顺序跑，`stdio: "inherit"`）：
 
 | 套件 | 断言 | 验证什么 |
 |---|---|---|
 | `test/vendor.mjs` | 11 | vendor 完整性：sha256 / 版本 / 文件头 / `AM_HOME` 隔离 / 不起 update 子进程 |
 | `test/am-smoke.mjs` | 20 | **渲染器 CLI 契约**：spawn 真 am，断言 argv、stdin、`-o`、页面自包含的负向断言、坏草稿的失败形状 |
 | `test/render-error.mjs` | 15 | 失败路径：坏草稿 → `isError` 带行号与正确示例、草稿仍落盘、重试是新 seq、收尾页失败也照样关闭 run |
-| `test/milestone.mjs` | 41 | **主 e2e**：`report_start` → `report_page` → journal 顺序 → 起 `serve` → 历史页面立刻可达 → 页面内容与响应头 → 索引页 → `report_end` 收尾页 → stdout 纯度 |
+| `test/milestone.mjs` | 44 | **主 e2e**：`report_start` → `report_page` → journal 顺序 → 起 `serve` → 历史页面立刻可达 → 页面内容与响应头 → 索引页 → `report_end` 收尾页 → stdout 纯度 → `report_syntax` 的组件主题与内置 `style` |
 | `test/host.mjs` | 30 | 路由与安全：路径穿越、符号链接逃逸、405、无 CORS 头、`X-Frame-Options`、`/api/*` 仅回环、gzip、索引分组与时间戳格式 |
-| `test/serve.mjs` | 28 | 宿主生命周期：`host.json` 写与 pid-guarded 清、bind-or-die 的三种提示、陈旧 host 记录 → `url: null`、`REPORT_MCP_PUBLIC_URL`、地址枚举顺序、`parsePageRoute` 的正反例 |
-| `test/manage.mjs` | 24 | `start` / `stop` / `status`：幂等、宿主 pid 与 `serve.log`、发布中的页面真的点得开、pid 被回收时拒绝发信号、端口被占时把宿主的原文带出来 |
+| `test/serve.mjs` | 31 | 宿主生命周期：`host.json` 与机器级登记表各自怎么写、怎么清、SIGKILL 后留下什么、bind-or-die 的三种提示、陈旧 host 记录 → `url: null`、`REPORT_MCP_PUBLIC_URL`、地址枚举顺序、`parsePageRoute` 的正反例 |
+| `test/manage.mjs` | 34 | `start` / `stop` / `status`：幂等、宿主 pid 与 `serve.log`、发布中的页面真的点得开、pid 被回收时拒绝发信号、端口被占时把宿主的原文带出来、**跨 home 只一个实例**（拒绝退出码 4、显式 `--port` 才放行、`stop --all`、死记录被下一个读者清掉） |
 | `test/e2e.mjs` | 17 | **多进程共享一个 run**：两个真实 server 进程交错写（seq 无重号无断档、无撕裂行）、双写者被 SIGKILL 后重启续号、派生 summary 与索引页 |
 
 共享测试件在 `test/harness.mjs`：MCP stdio 客户端（含 boot 行解析）、`startServe`、
@@ -66,6 +66,10 @@ node scripts/render-samples.mjs   # 示例页必须还能从草稿生成出来
 **二、断言只盯 am 的稳定输出标记。** `class="am-panel"`、`id="am-source"`、
 `<!doctype html>`、字节数、sha256。任何去断言面板具体布局的测试都是在重实现渲染器，
 上游一改版就全红。同理**不要**为了测试去解析页面里的 SVG 结构。
+
+**三、自己 spawn `serve` 就指一个 `XDG_STATE_HOME`。** 宿主登记表是机器级的，写进真的
+`~/.local/state` 里，一套还在跑的宿主会让另一套的 `start` 拒绝（退出码 4）。
+`harness.startServe` 已经默认指到 `<home>/.state`，照抄这个做法。
 :::
 
 ## 目录
@@ -77,6 +81,7 @@ src/
   render.ts     spawn vendored am：AM_HOME 隔离、超时、输出截断、错误原文透传
   host.ts       serve 的路由、索引页模板、URL 拼接、地址枚举、响应头
   manage.ts     start/stop/status：spawn 宿主、按 host.json 的 pid 收摊、认进程再发信号
+  registry.ts   机器级宿主登记表：谁在跑、跑在哪个 home、哪个端口
   store.ts      RunWriter(append + seq + 锁) / 页面路径 / host.json 读写 / listRuns
   summarize.ts  派生 RunSummary，索引页与 /api/runs 共用
   types.ts      四种记录的判别联合 + RunSummary

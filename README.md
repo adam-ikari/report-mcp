@@ -91,7 +91,14 @@ failure: draft
 
 ### `report_syntax`
 
-`{ component? }` → 渲染器自己的 `am list` / `am help <topic>` 原文。agent 学草稿语法的入口，我们不手写第二份规范。
+`{ component? }` → 渲染器自己的 `am list` / `am help <topic>` 原文。agent 学草稿语法的入口；第二份规范在这个仓库里不存在，语法只有一份真相。唯一的内置主题 `style` 答的不是渲染器，是本仓库的正文写作规范（见下）。
+
+## 正文怎么写
+
+版面归渲染器，措辞归 `src/server.ts` 的 `STYLE_RULES` 一份常量：首句就是事实、`——` 后面放让那句成立的东西（路径、命令、状态码、字节数、sha）、错误用陈述句承认、术语留英文、短句单因果链。禁：三件套、隔条加粗、not-X-but-Y、结尾复述、销售词、「我们」、感叹号、diagram 之外的 emoji。
+
+同一份常量拼进 `report_page` 的 description，`report_syntax {component:"style"}` 返回它，`test/milestone.mjs` 钉住两处都带着这份规则：`report_page` 里那段出现不止一次就红。所以加一条只改 `STYLE_RULES`。自检：跟本仓库 CHANGELOG 对读，比它更「精致」就是写错了。
+
 
 ## 渲染器
 
@@ -112,10 +119,12 @@ failure: draft
 ```bash
 report-mcp start              # 后台起 serve，诊断写 $REPORT_MCP_HOME/serve.log
 report-mcp status             # 在不在跑、地址、home、几次汇报几页；--json 给 agent
-report-mcp stop               # 停掉；没在跑也算成功
+report-mcp stop               # 停掉；没在跑也算成功。--all 连别的 home 的一起停
 ```
 
 三条都不引入新状态：`start` spawn 的就是同一个 `serve`，pid 记在 `host.json` 里（agent 侧读的也是它），`stop` 对着那个 pid 发 SIGTERM。`start` 幂等——agent 每次会话都调一次也不会撞端口。`status` 的退出码回答「在不在跑」（0/1）。
+
+一台机器只有一个宿主。`host.json` 说得了「谁在服务这个 home」，说不了「这台机器上有没有宿主」，所以 `serve` 监听从成功后还往 `$XDG_STATE_HOME/report-mcp/hosts/` 写一条登记：别的 home 已经有活宿主时，`start` 拒绝并报出对方的地址与 home（退出码 4，区别于 3 的「起不来」）。确实要第二个实例就显式给 `--port`；`stop --all` 一次停干净。登记表按 pid 判活，被 SIGKILL 留下的死记录由下一个读到它的命令删掉。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -135,6 +144,7 @@ report-mcp stop               # 停掉；没在跑也算成功
 | `REPORT_MCP_HOST` | `127.0.0.1` | **serve** 的绑定地址，`0.0.0.0` = 局域网 |
 | `REPORT_MCP_PORT` | `7788` | **serve** 的监听端口 |
 | `REPORT_MCP_PUBLIC_URL` | 自动发现 | 对外宣传的地址。容器端口映射 / 反代后面必须设 |
+| `XDG_STATE_HOME` | `~/.local/state` | 宿主登记表目录（`report-mcp/hosts/`）。容器里每个 home 各自跑一个宿主时指到各自的可写目录，否则 `start` 会看见别人的实例并拒绝 |
 
 诊断信息全部打 **stderr**，stdout 只有 JSON-RPC。
 
@@ -192,8 +202,12 @@ report-mcp --version    # report-mcp 0.4.0
 
 > 任务开始时调 `report_start`。**每完成一件值得读的事**就调一次 `report_page`：交一份 am 草稿
 > （frontmatter + `## Panel` + 组件围栏），不要交 HTML，也不要交日志行；不确定语法就调
-> `report_syntax`。这个调用会同步等一次渲染，失败会带行号和正确示例——改好草稿再调一次，
-> 不用问我。结束时调 `report_end`，**并且给它一份收尾页草稿**（`template: doc`），那是我先看的那一页。
+> `report_syntax`，不确定措辞就调 `report_syntax {component:"style"}`。这个调用会同步等一次渲染，
+> 失败会带行号和正确示例——改好草稿再调一次，不用问我。结束时调 `report_end`，**并且给它一份
+> 收尾页草稿**（`template: doc`），那是我先看的那一页。
+
+措辞规则不用抄进系统提示，它已经在 `report_page` 的 description 里；提示里给一句「按那套规范写」
+就够了，多一份副本就多一处会漂移的地方。
 
 关键差别要说清：`report_page` 不是纯 fire-and-forget，它是一次 commit point。
 
@@ -202,7 +216,7 @@ report-mcp --version    # report-mcp 0.4.0
 ```bash
 npm install
 npm run build       # tsc → dist/
-npm test            # 构建 + 八套测试（186 条断言）
+npm test            # 构建 + 八套测试（202 条断言）
 npm run typecheck
 node dist/index.js serve --port 7789   # 本地起宿主
 ```
@@ -214,7 +228,8 @@ src/
   store.ts      RunWriter(锁 + append/seq 同步) + Store(路径/列表) + host.json
   render.ts     一次 spawn：草稿进、页面出、错误原样带回
   host.ts       serve：路由、索引页、地址枚举、响应头
-  manage.ts     start/stop/status：spawn 宿主、按 host.json 的 pid 收摊
+  manage.ts     start/stop/status：spawn 宿主、按 host.json 的 pid 收摊、认进程再发信号
+  registry.ts   机器级宿主登记表（$XDG_STATE_HOME/report-mcp/hosts）：start 用它拒绝起第二个实例
   summarize.ts  从记录重算 RunSummary
   types.ts      四种记录的判别联合
 vendor/am/      am.mjs + LICENSE + manifest.json + README.md（生成物，sha 门禁）

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import type { Store } from "./store.js";
 import { LAN_WARNING } from "./host.js";
+import { registeredHosts, removeHost, type HostRegistration } from "./registry.js";
 
 /**
  * `start` / `stop` / `status`: a human or an agent turning the one HTTP host for
@@ -15,6 +16,9 @@ import { LAN_WARNING } from "./host.js";
  * written after the listen succeeds and cleared on exit. That file is the whole
  * supervision protocol — `stop` reads the pid out of it and sends SIGTERM, which
  * is the signal `serve` already shuts down on.
+ *
+ * `start` also reads the machine-wide registry (`src/registry.ts`), because one host
+ * per *home* would still let a second home quietly take a second port.
  */
 
 const SELF = path.join(path.dirname(fileURLToPath(import.meta.url)), "index.js");
@@ -23,6 +27,8 @@ export interface ManageOptions {
   host: string;
   port: number;
   version: string;
+  /** Someone named a port, so a second host elsewhere on the box is what they asked for. */
+  explicitPort: boolean;
 }
 
 export interface Status {
@@ -36,6 +42,8 @@ export interface Status {
   log?: string;
   runs?: number;
   pages?: number;
+  /** Hosts serving some other home on this machine. */
+  others?: { url: string; home: string; pid: number }[];
 }
 
 function alive(pid: number): boolean {
@@ -82,12 +90,41 @@ function liveHost(store: Store): { pid: number; url: string } | null {
   return { pid: h.pid, url: h.url };
 }
 
+/**
+ * Live hosts serving some *other* home on this machine. Entries whose pid is gone,
+ * or is now some unrelated process, are deleted here rather than left to accumulate.
+ */
+function otherHosts(store: Store): HostRegistration[] {
+  const out: HostRegistration[] = [];
+  for (const h of registeredHosts()) {
+    if (!alive(h.pid) || !isServe(h.pid)) {
+      removeHost(h);
+      continue;
+    }
+    if (h.home === store.home) continue;
+    out.push(h);
+  }
+  return out.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+}
+
 export async function startHostProcess(store: Store, opts: ManageOptions): Promise<Status> {
   const log = path.join(store.home, "serve.log");
 
   // Idempotent: an agent that starts the host on every session must not fail
   // because a session already did it.
   if (liveHost(store)) return status(store);
+
+  // One instance per machine, unless a port was named. A second host nobody asked
+  // for means two indexes, two sets of links, and no way to tell which one a page
+  // was published against.
+  const others = otherHosts(store);
+  if (others.length && !opts.explicitPort) {
+    const who = others.map((h) => `${h.url}（home ${h.home}，pid ${h.pid}）`).join("、");
+    throw Object.assign(
+      new Error(`这台机器上已经有宿主在跑：${who}。start 只起一个实例——先停掉它（report-mcp stop --all），确实要第二个就显式给 --port`),
+      { conflict: others },
+    );
+  }
 
   const child = spawn(process.execPath, [SELF, "serve", "--host", opts.host, "--port", String(opts.port)], {
     detached: true,
@@ -141,22 +178,30 @@ function tail(file: string, bytes = 1200): string {
   return text.slice(-bytes).trim();
 }
 
-export async function stopHostProcess(store: Store): Promise<{ stopped: boolean; pid?: number }> {
+export async function stopHostProcess(store: Store, all = false): Promise<{ stopped: boolean; pid?: number; also?: number[] }> {
   const h = store.readHostState();
-  if (!h || !alive(h.pid)) return { stopped: false };
-  if (!isServe(h.pid)) {
+  if (h && alive(h.pid) && !isServe(h.pid)) {
     throw Object.assign(new Error(`pid ${h.pid} 在跑，但它不是这个 home 的 report-mcp serve —— 不动它`), { stale: true });
   }
-  process.kill(h.pid, "SIGTERM");
-  const gone = await settled(5000, async () => (alive(h.pid) ? null : true));
-  if (!gone) throw new Error(`pid ${h.pid} 收到 SIGTERM 后 5s 内没退出`);
-  return { stopped: true, pid: h.pid };
+  // `--all` is the way out of the refusal in `start`: the other host belongs to a
+  // different home, so this command has to reach it by pid, not by `host.json`.
+  const also = all ? otherHosts(store) : [];
+  const target = h && alive(h.pid) ? { pid: h.pid } : null;
+  if (!target && !also.length) return { stopped: false };
+  if (target) process.kill(target.pid, "SIGTERM");
+  for (const other of also) process.kill(other.pid, "SIGTERM");
+
+  const lingering = [target?.pid, ...also.map((o) => o.pid)].filter((p): p is number => typeof p === "number");
+  const gone = await settled(5000, async () => (lingering.some((pid) => alive(pid)) ? null : true));
+  if (!gone) throw new Error(`pid ${lingering.join(", ")} 收到 SIGTERM 后 5s 内没退出`);
+  return { stopped: true, pid: target?.pid, also: also.map((o) => o.pid) };
 }
 
 export async function status(store: Store): Promise<Status> {
   const h = store.readHostState();
   const running = !!h && alive(h.pid);
-  const out: Status = { running, home: store.home, log: path.join(store.home, "serve.log") };
+  const others = otherHosts(store).map((o) => ({ url: o.url, home: o.home, pid: o.pid }));
+  const out: Status = { running, home: store.home, log: path.join(store.home, "serve.log"), ...(others.length ? { others } : {}) };
   if (!h || !running) return out;
   const runs = await store.listRuns(60);
   return {
@@ -186,11 +231,13 @@ export const NO_COLOR: Palette = { off: "", bold: "", dim: "", green: "", red: "
 
 /** Human-readable, one line per fact; `--json` is there for agents. */
 export function describe(s: Status, opts: ManageOptions, a: Palette = ANSI): string {
+  const others = (s.others ?? []).map((o) => `    另有宿主 ${o.url} ${a.dim}(home ${o.home} · pid ${o.pid})${a.off}`);
   if (!s.running) {
     const bind = opts.host === "127.0.0.1" ? "" : ` --host ${opts.host} --port ${opts.port}`;
     return [
       `${a.red}✗${a.off} 宿主未运行`,
       `${a.dim}home${a.off}    ${s.home}`,
+      ...(others.length ? [...others, `   ${a.dim}start 会拒绝再起一个（同端口只一个实例），除非显式 --port${a.off}`] : []),
       `   起一个：${a.bold}report-mcp start${a.off}${bind}`,
     ].join("\n");
   }
@@ -203,6 +250,7 @@ export function describe(s: Status, opts: ManageOptions, a: Palette = ANSI): str
     `${a.dim}home${a.off}    ${s.home}`,
     `${a.dim}内容${a.off}    ${s.runs} 次汇报 · ${s.pages} 页`,
     `${a.dim}日志${a.off}    ${s.log}`,
+    ...others,
     ...(wild ? [`${a.yellow}注意${a.off}    ${LAN_WARNING}`] : []),
   ].join("\n");
 }
