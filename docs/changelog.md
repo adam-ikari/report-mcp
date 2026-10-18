@@ -60,6 +60,9 @@ npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp
   `这一页说清楚三件事：…` 这类元叙述删掉，首句直接给数据和结论；正文里的「我们」一并清掉
 - 宿主未运行时的 `hint` 从「跑 `report-mcp serve`」改成 `report-mcp start`——agent 照着
   提示 spawn 前台宿主会占住自己的一次工具调用直到超时
+- 访问范围写成一张能照抄的表放进 README 与[安装与接入](/guide/install.html)：本机 /
+  局域网（`--host 0.0.0.0`）/ 公网隧道（`--tunnel`）/ 三者都开（`--host 0.0.0.0 --tunnel`），
+  `--help` 也列出这四条——`host.json` 的 `urls` 第一个就是 agent 返回的链接
 
 ### 测试
 

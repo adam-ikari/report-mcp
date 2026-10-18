@@ -154,6 +154,15 @@ report-mcp stop               # 停掉；没在跑也算成功。--all 连别的
 
 ### 手机上打开
 
+访问范围可以叠加，`host.json` 的 `urls` 第一个就是 agent 返回的链接：
+
+| 想在哪打开 | 命令 | `host.json` 的 `urls` |
+|---|---|---|
+| 本机 | `report-mcp start` | `http://127.0.0.1:7788` |
+| 同一网段 | `report-mcp start --host 0.0.0.0` | 局域网地址 → `127.0.0.1` |
+| 公网（隧道） | `report-mcp start --tunnel` | 隧道地址 → `127.0.0.1` |
+| 三者都要 | `report-mcp start --host 0.0.0.0 --tunnel` | 隧道 → 局域网 → `127.0.0.1` |
+
 ```bash
 report-mcp serve --host 0.0.0.0
 ```

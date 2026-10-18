@@ -149,6 +149,15 @@ home    /home/you/.report-mcp-lan
 
 ## 让手机能打开
 
+三种范围可以叠加，`host.json` 的 `urls` 第一个就是 agent 返回的链接：
+
+| 想在哪打开 | 命令 | `host.json` 的 `urls` |
+|---|---|---|
+| 本机 | `report-mcp start` | `http://127.0.0.1:7788` |
+| 同一网段 | `report-mcp start --host 0.0.0.0` | 局域网地址 → `127.0.0.1` |
+| 公网（隧道） | `report-mcp start --tunnel` | 隧道地址 → `127.0.0.1` |
+| 三者都要 | `report-mcp start --host 0.0.0.0 --tunnel` | 隧道 → 局域网 → `127.0.0.1` |
+
 ```bash
 report-mcp start --host 0.0.0.0     # 或者前台的 REPORT_MCP_HOST=0.0.0.0 report-mcp serve
 ```
@@ -211,6 +220,8 @@ report-mcp start --tunnel           # 或前台 report-mcp serve --tunnel
   不用 Cloudflare 账号、不用登录、不用配 DNS——这是它的 Quick Tunnel 模式，地址每次都随机。
 - 隧道地址写进 `host.json` 的 **第一位**：agent 返回的链接、索引页、手机浏览器都用它；本地回环地址
   排在后面当备选。
+- 要和同一网段一起开就再加上 `--host 0.0.0.0`——`urls` 变成隧道 → 局域网 → 回环，隧道地址仍排
+  第一，agent 返回的也还是它。
 - 宿主**已经在跑、但还没有隧道**时，`start --tunnel` 会先停掉它再重起，并在输出里说一句
   「已重启并加上」。加隧道改变了宿主对外是什么，所以这里不做「悄悄忽略」。已经是隧道的宿主
   仍然幂等，不重启。

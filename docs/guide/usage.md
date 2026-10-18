@@ -219,9 +219,10 @@ URL 上立刻可达。容器里则检查 `REPORT_MCP_PUBLIC_URL`（pid 判活不
 不会。这条通道没有挂起的请求、没有超时、没有入站写入口（非 GET/HEAD 一律 405）。
 
 **Q：能在另一台机器 / 手机上读？**
-同一个局域网：`report-mcp start --host 0.0.0.0`，地址自己算出来（见
+本机：`report-mcp start`。同一局域网：`report-mcp start --host 0.0.0.0`，地址自己算出来（见
 [安装与接入](./install.md#让手机能打开)）。不在同一网段：`report-mcp start --tunnel`，起一条
-Cloudflare Quick Tunnel，agent 返回的链接直接可分享。要更保守就用 `ssh -L` 端口转发。
+Cloudflare Quick Tunnel，agent 返回的链接直接可分享。三者都要就叠加——`report-mcp start
+--host 0.0.0.0 --tunnel`，`urls` 是隧道 → 局域网 → 回环，隧道排第一。要更保守就用 `ssh -L` 端口转发。
 **没有鉴权**这件事不会变好，那些页面是完整的汇报文档，`--tunnel` 是唯一一条故意把它们放到公网的路径。
 
 **Q：一页能放多少内容？**
