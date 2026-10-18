@@ -211,7 +211,15 @@ report-mcp --version    # report-mcp 0.4.0
 { "mcpServers": { "report": { "command": "report-mcp" } } }
 ```
 
-然后给 agent 的系统提示加一句约定：
+### 配套 skill
+
+本仓库带一份 OpenCode skill——[`.opencode/skills/report-mcp/SKILL.md`](.opencode/skills/report-mcp/SKILL.md)：
+四个工具的调用时机、草稿骨架、失败怎么修、反模式都在里面，agent 需要时自己加载。项目内
+OpenCode 自动搜 `.opencode/skills`；别的项目用就拷到 `~/.config/opencode/skills/report-mcp/`，
+或在 `opencode.json` 的 `skills` 里指向本仓库的 `.opencode/skills`。它**不抄**语法和措辞——
+让 agent 调 `report_syntax`，真相仍只有渲染器和 `STYLE_RULES` 两处。
+
+不装 skill 的话，把这段抄进系统提示：
 
 > 任务开始时调 `report_start`。**每完成一件值得读的事**就调一次 `report_page`：交一份 am 草稿
 > （frontmatter + `## Panel` + 组件围栏），不要交 HTML，也不要交日志行；不确定语法就调

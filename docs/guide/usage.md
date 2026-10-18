@@ -182,7 +182,15 @@ failure: draft
 
 ## 给 agent 的约定话术
 
-接上之后，往系统提示里加这一段：
+### 配套 skill（推荐）
+
+本仓库带一份 OpenCode skill：`.opencode/skills/report-mcp/SKILL.md`。四个工具的调用时机、草稿
+骨架、失败怎么修、反模式都在里面，agent 需要时自己加载。项目内 OpenCode 自动搜 `.opencode/skills`；
+别的项目用就拷到 `~/.config/opencode/skills/report-mcp/`，或在 `opencode.json` 的 `skills` 里指向本仓库
+的 `.opencode/skills`。它**不抄**语法和措辞——让 agent 调 `report_syntax`，真相仍只有渲染器和
+`STYLE_RULES` 两处。
+
+不装 skill 的话，把这段抄进系统提示：
 
 > 任务开始时调 `report_start` 给一个我看得懂的标题。每完成一个**值得读的**里程碑，
 > 调一次 `report_page`，交一份 am 草稿（frontmatter 自己写 `template` / `theme`，

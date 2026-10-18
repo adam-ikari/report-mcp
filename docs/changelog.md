@@ -42,6 +42,11 @@ npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp
   **安全边界**：cloudflared 从 `127.0.0.1` 连回宿主，所以「来源是回环」不再等于「来自本机」；
   宿主把 `CF-Connecting-IP` / `X-Forwarded-*` 当代理信号，并在隧道开着时关掉 `/api/runs*`，
   journal JSON 不跟着出去
+- **配套 skill：把「给 agent 的约定」从系统提示变成一个可加载的 SKILL。**
+  `.opencode/skills/report-mcp/SKILL.md` 装上四个工具的调用时机、草稿骨架、失败怎么修与反模式，
+  OpenCode 在项目内自动发现；别的项目拷到 `~/.config/opencode/skills/`，或把本仓库的
+  `.opencode/skills` 加进 `skills` 配置。skill 不抄语法和措辞——它让 agent 调 `report_syntax` /
+  `report_syntax {component:"style"}`，真相仍只有渲染器和 `STYLE_RULES` 两处
 
 ### 修掉
 
