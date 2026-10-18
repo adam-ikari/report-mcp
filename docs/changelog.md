@@ -19,9 +19,9 @@ npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp
 - **`stop` 拒绝动不是宿主的 pid**：pid 会被回收。`/proc/<pid>/cmdline` 认不出 `serve` 时
   直接报错退出，而不是照着记录杀进程（没有 procfs 的平台退化成只判活）
 - 绑 `0.0.0.0` 的警告由 `start` 打在终端上，不会随着 banner 一起沉进日志
-- **`start` 在一台机器上只放一个宿主，跨 home 也认。** `host.json` 按 home 存放，看不见
+- **`start` 在同一个用户账户下只放一个宿主，跨 home 也认。** `host.json` 按 home 存放，看不见
   别的 home 的宿主，于是换个 `REPORT_MCP_HOME` 就能悄悄攒出两份索引页、两套互不相认的链接。
-  `serve` 监听从成功后再写一条机器级登记 `$XDG_STATE_HOME/report-mcp/hosts/<pid>-<port>.json`，
+  `serve` 监听从成功后再写一条按账户的登记 `$XDG_STATE_HOME/report-mcp/hosts/<pid>-<port>.json`，
   `start` 查到活宿主且调用方没显式给 `--port` 就**拒绝**（退出码 4，区别于 3 的「起不来」），
   报出对方的地址与 home；`stop --all` 一次停干净。显式 `--port` 按字面意思放行第二个实例。
   死登记（pid 没了或 pid 已被别的进程占去）由下一个读到它的命令删除，没有 `clean` 子命令
@@ -32,6 +32,27 @@ npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp
   术语留英文；禁三件套、隔条加粗、not-X-but-Y、结尾复述、销售词、「我们」、感叹号
 - `report_syntax` 的 `style` 与 am 的 frontmatter `style`（STE 检查等级 `off|80|strict`）
   不是一回事，`docs/reference/tools.md` 把这两个写在一起免得混
+- **`--tunnel`：需要穿透时给宿主挂一条 Cloudflare Quick Tunnel。** `report-mcp start --tunnel`
+  （或 `serve --tunnel`）在监听起来之后 spawn `cloudflared tunnel --url`，从它的输出里认出
+  `https://<words>.trycloudflare.com`，插到 `urls` 第一位再写 `host.json`——agent 返回的链接、
+  索引页、手机浏览器都走它。不用 Cloudflare 账号、不用配 DNS；地址每次随机。`start --tunnel`
+  碰上**没有隧道的活宿主**会先停掉再重起（加隧道改变了宿主对外是什么），已经是隧道则保持幂等；
+  隧道起不来就退出码 3 且不起本地宿主，不给「看起来在跑其实只对内」的假象；退出时 cloudflared
+  跟宿主一起收走。`REPORT_MCP_TUNNEL` 等于开关，`REPORT_MCP_CLOUDFLARED` 指可执行文件路径。
+  **安全边界**：cloudflared 从 `127.0.0.1` 连回宿主，所以「来源是回环」不再等于「来自本机」；
+  宿主把 `CF-Connecting-IP` / `X-Forwarded-*` 当代理信号，并在隧道开着时关掉 `/api/runs*`，
+  journal JSON 不跟着出去
+
+### 修掉
+
+- **一条缺字段的登记能让 `status` 整个抛出来。** `otherHosts` 按 `startedAt` 排序，而
+  `registeredHosts` 的校验只过 pid / port / url / home：别的 home 留下一条没有 `startedAt`
+  的登记（手改的，或者版本改了字段名），`status` / `start` / `stop --all` 三条命令一起
+  `TypeError` 退出——而它们本来正是查这件事的入口。校验改成逐字段对着 `HostRegistration`
+  过，不合格的按原有规则删掉
+- **`registerHost` 写不进去不再静默**：往 stderr 打一行。单实例门禁悄悄消失比多起一个宿主
+  难查——宿主本身没坏，坏的是「知道它存在」这件事
+- `stop --all` 在本 home 没有宿主时打印 `已停止（pid —）`，现在说清停的是别的 home 的 pid
 
 ### 变更
 
@@ -42,13 +63,18 @@ npm install -g --install-links=true git+https://github.com/adam-ikari/report-mcp
 
 ### 测试
 
-- 新增 `test/manage.mjs`（34）：三条命令的幂等、pid 被回收时拒绝下手、陈旧记录清掉后能接管、
+- 新增 `test/tunnel.mjs`（24）：`--tunnel` 的地址成为 `host.json` 首选且与 `/api/health` 一致、
+  隧道开着时 `/api/runs` 关掉（伪造 `CF-Connecting-IP` 的回环请求也认作代理）、退出时收掉
+  cloudflared 进程、缺 cloudflared 与「起来就退」两种失败都退出码 3 且不留宿主、`start --tunnel`
+  会重启没有隧道的活宿主而不会重启已有隧道的（走同一条路）、隧道地址不误报成 `0.0.0.0` 绑定
+- 新增 `test/manage.mjs`（36）：三条命令的幂等、pid 被回收时拒绝下手、陈旧记录清掉后能接管、
   端口被别人占时的失败路径与 `serve.log` 尾巴、**跨 home 的第二个 `start` 被拒绝（4）而显式
-  `--port` 放行**、`stop --all` 打到别的 home 的 pid、死登记被下一个读者清掉；
+  `--port` 放行**、`stop --all` 打到别的 home 的 pid、死登记与缺 `startedAt` 的登记都被下一个
+  读者清掉（后者就是上面那条崩溃的回归测试）；
   `test/serve.mjs` 补 SIGTERM 退出清 `host.json` 与登记、SIGKILL 两者都留（31）
 - `test/milestone.mjs`（44）补两条：`report_syntax style` 返回的是规范而不是渲染器的错误，
   以及规范确实出现在 `report_page` 的 description 里（同一段出现不止一次就红）
-- 现在 **202 条断言 / 八套**
+- 现在 **228 条断言 / 九套**
 
 ## v0.4.0 · 2026-10-10
 

@@ -51,7 +51,7 @@ try {
   check("host.json records the live host", st.pid === host.proc.pid && st.url === host.origin && st.home === HOME && st.version === "0.4.0", JSON.stringify(st).slice(0, 120));
   check("host.json carries every advertised address", Array.isArray(st.urls) && st.urls[0] === host.origin);
 
-  // The machine-wide registry is what makes `start` refuse a second host in a second
+  // The per-account registry is what makes `start` refuse a second host in a second
   // home. It is written by the same code path as host.json, so it is checked here.
   const regDir = path.join(HOME, ".state", "report-mcp", "hosts");
   const regFile = () => path.join(regDir, `${host.proc.pid}-${port}.json`);

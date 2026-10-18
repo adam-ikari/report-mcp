@@ -23,7 +23,7 @@ const HOME = path.join(TMP, "home");
 const HOME_B = path.join(TMP, "home-b");
 fs.mkdirSync(HOME, { recursive: true });
 fs.mkdirSync(HOME_B, { recursive: true });
-// The host registry is machine-wide by design. Tests would otherwise write into
+// The host registry is per-account by design. Tests would otherwise write into
 // ~/.local/state and make each other's `start` refuse.
 const STATE = path.join(TMP, "state");
 
@@ -129,7 +129,7 @@ try {
   check("start on failure leaves no host record", readHost() === null);
   squatter.close();
 
-  // --- one host per machine, not one per home ---
+  // --- one host per account, not one per home ---
   // The registry is what makes this hold: `host.json` can only ever speak for its own
   // home, so without it a second `start` in a second home would quietly take a second
   // port and split the same reports across two indexes.
@@ -173,6 +173,17 @@ try {
   const portC = await freePort();
   const afterGhost = cli("start", ["--port", String(portC)], {}, HOME_B);
   check("and start works again", afterGhost.status === 0 && isAlive(readHost(HOME_B)?.pid), afterGhost.stderr.slice(0, 200));
+
+  // An entry missing a field the readers dereference must be dropped, not sorted.
+  // `otherHosts` orders by startedAt, so once two neighbours are live at all — HOME_B's
+  // real entry plus this half-written one — the comparator runs and a missing field
+  // throws out of status, start, and stop --all alike.
+  const liveB = readHost(HOME_B)?.pid;
+  const torn = path.join(STATE, "report-mcp", "hosts", `${liveB}-2.json`);
+  fs.writeFileSync(torn, JSON.stringify({ pid: liveB, port: 2, host: "127.0.0.1", url: "http://127.0.0.1:2", home: "/nonexistent-home", version: "0.0.0" }));
+  const readTorn = cli("status", ["--json"]);
+  check("an entry without startedAt neither crashes the read nor counts as a host", !readTorn.stderr.includes("TypeError") && !fs.existsSync(torn), `status=${readTorn.status} ${readTorn.stderr.trim().slice(0, 120)}`);
+  check("and the live host next to it is still reported", JSON.parse(readTorn.stdout).others?.some((o) => o.home === HOME_B), readTorn.stdout.replace(/\s+/g, " ").slice(0, 200));
   cli("stop", ["--all"], {}, HOME_B);
 } catch (err) {
   check("no exception", false, String(err && err.stack ? err.stack : err));

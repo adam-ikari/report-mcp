@@ -134,16 +134,16 @@ report-mcp stop                     # 停掉，host.json 与登记表一起清�
 并给出换端口或者 `REPORT_MCP_PUBLIC_URL` 的办法。**没有 attach、没有接管、没有选举**：
 撞了就退。
 
-`start` 还多管一层：一台机器一个宿主。`serve` 监听从成功后往
+`start` 还多管一层：同一个用户账户一个宿主。`serve` 监听从成功后往
 `$XDG_STATE_HOME/report-mcp/hosts/` 记一条，所以换一个 home 也悄悄起不出第二个：
 
 ```
-· 没有起新的宿主：这台机器上已经有宿主在跑：http://127.0.0.1:7788（home /home/you/.report-mcp，
+· 没有起新的宿主：这个账户下已经有宿主在跑：http://127.0.0.1:7788（home /home/you/.report-mcp，
 pid 4112）。start 只起一个实例——先停掉它（report-mcp stop --all），确实要第二个就显式给 --port
 home    /home/you/.report-mcp-lan
 ```
 
-退出码 **4**，与 3 的「起不来」分开：这里什么都没坏，只是这台机器已经有了它要起的那个宿主。
+退出码 **4**，与 3 的「起不来」分开：这里什么都没坏，只是这个账户已经有了它要起的那个宿主。
 显式 `--port` 就是「我确实要第二个」，登记表不再拦。死掉的登记（pid 没了，或者那个 pid
 已经被别的进程占去）由下一个读到它的命令删掉，不需要谁来 `clean`。
 
@@ -190,6 +190,38 @@ agent 侧返回的链接取的就是第一个地址，所以手机打开它给�
 在 390px 的手机上会有约 500px 宽，需要左右拖动。想让某一页在手机上不用推，
 就把表压到三列以内、面板用 `span=1`，或者把宽表放进度页、结论页只留短表。
 
+### 不在同一网段：`--tunnel`
+
+手机不在同一个 Wi-Fi，或者要随手把链接发给别人时，加 `--tunnel`：
+
+```bash
+report-mcp start --tunnel           # 或前台 report-mcp serve --tunnel
+```
+
+宿主在监听起来之后顺带起一条 [Cloudflare Quick Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/)：
+
+```
+[report-mcp] serve    https://random-words-1234.trycloudflare.com/
+[report-mcp]          http://127.0.0.1:7788/
+[report-mcp] home     /home/you/.report-mcp
+[report-mcp] 注意      隧道地址公网可达：拿到链接的人都能读，无鉴权。
+```
+
+- 需要本机有 **`cloudflared`**（`cloudflared` 在 PATH 上，或用 `REPORT_MCP_CLOUDFLARED` 指路径）。
+  不用 Cloudflare 账号、不用登录、不用配 DNS——这是它的 Quick Tunnel 模式，地址每次都随机。
+- 隧道地址写进 `host.json` 的 **第一位**：agent 返回的链接、索引页、手机浏览器都用它；本地回环地址
+  排在后面当备选。
+- 宿主**已经在跑、但还没有隧道**时，`start --tunnel` 会先停掉它再重起，并在输出里说一句
+  「已重启并加上」。加隧道改变了宿主对外是什么，所以这里不做「悄悄忽略」。已经是隧道的宿主
+  仍然幂等，不重启。
+- 起来失败（没装 `cloudflared`、连不上 Cloudflare、超时）就**退出码 3，且不起本地宿主**，
+  并把 cloudflared 的原文带出来——不会留一个「看起来在跑、其实对内」的宿主骗你。
+- 退出（Ctrl-C / `report-mcp stop`）时 cloudflared 跟宿主一起收走。被 **SIGKILL** 时和 `host.json`
+  一样会留下孤儿进程，自己 `pkill cloudflared`。
+- `/api/runs` · `/api/runs/:id`（journal JSON）在隧道开着时**整条关掉**。cloudflared 是从
+  `127.0.0.1` 连回宿主的，光看来源地址分不出「本地」和「隧道」；宿主把 `CF-Connecting-IP`
+  这类转发头当作代理信号，两者都挡。
+
 ::: warning 无鉴权，而且后果比旧版直观
 `0.0.0.0` 现在发出去的是**一份份完整的汇报文档**，同网段任何设备都能读，没有鉴权也没有
 HTTPS。索引页顶部会挂一行同样的提醒。别把它映射到公网。要收紧：
@@ -198,6 +230,7 @@ HTTPS。索引页顶部会挂一行同样的提醒。别把它映射到公网。
 - 防火墙按来源 IP 限制
 - 跨公网用 SSH 端口转发：`ssh -L 7788:127.0.0.1:7788 host`，然后开 `http://127.0.0.1:7788/`
 
+`--tunnel` 是唯一一条**故意**把内容放到公网的路径：地址不可猜，但拿到它的人都能读完整页面。
 宿主本身不提供鉴权。
 :::
 
@@ -253,8 +286,10 @@ environment:
 | `REPORT_MCP_HOME` | `~/.report-mcp` | 两边 | 存储根目录：`runs/`、`pages/`、`am/`、`host.json` |
 | `REPORT_MCP_RUN_ID` | 自动生成 | MCP | 固定 run id，让多个 MCP 实例写进同一次汇报 |
 | `REPORT_MCP_HOST` | `127.0.0.1` | serve / start | 绑定地址，`0.0.0.0` 见上 |
-| `REPORT_MCP_PORT` | `7788` | serve / start | 监听端口（`--port` 同义）。给 `start` 显式设 = 「我承认这台机器上还要第二个宿主」 |
+| `REPORT_MCP_PORT` | `7788` | serve / start | 监听端口（`--port` 同义）。给 `start` 显式设 = 「我承认这个账户还要第二个宿主」 |
 | `REPORT_MCP_PUBLIC_URL` | 无 | serve | 对外宣传的地址；容器端口映射、反向代理后面必须设 |
+| `REPORT_MCP_TUNNEL` | 无 | serve / start | 非空即等于 `--tunnel`：起一条 Cloudflare Quick Tunnel，地址进 `host.json` |
+| `REPORT_MCP_CLOUDFLARED` | `cloudflared` | serve / start | `--tunnel` 用的可执行文件路径（默认从 PATH 找） |
 | `XDG_STATE_HOME` | `~/.local/state` | serve / start | 宿主登记表落在 `report-mcp/hosts/`。容器各自一个宿主时指到各自的可写目录 |
 
 v0.3 的 `REPORT_MCP_FILE_ROOTS` / `MAX_FILE_BYTES` / `REMOTE*` 全部删除：

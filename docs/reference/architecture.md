@@ -51,18 +51,32 @@ agent 进程在 publish 时读这个文件 + `process.kill(pid, 0)` 判活：活
 真实损害，认不出来就拒绝动手（没有 procfs 的平台退化成只判活，这条在测试里也钉着）。
 `start` 幂等，因为 agent 也会用它——每次会话起一次，不能因为上一次还在跑就报失败。
 
-**单实例的范围是这台机器，不是一个 home。** `host.json` 按 home 存放，天生只能回答
+**单实例的范围是这个用户账户，不是一个 home，也不严格是一台机器。** `host.json` 按 home 存放，天生只能回答
 「谁在服务这个 home」；换个 `REPORT_MCP_HOME` 就看不见别的宿主，于是同一台机器上可以悄悄
-攒出两三个宿主、两份索引页、两套互不相认的链接。`serve` 监听从成功后因此再写一条机器级登记：
+攒出两三个宿主、两份索引页、两套互不相认的链接。`serve` 监听从成功后因此再写一条按账户的登记：
 `$XDG_STATE_HOME/report-mcp/hosts/<pid>-<port>.json`。`start` 先查它——有活宿主且调用方
 **没有**显式给 `--port`，就拒绝（退出码 4：不是起不来，是已经有了）；显式给了端口，那就按
 字面意思理解，放行第二个实例。清理借用 `stop` 早就需要的同一招：pid 判活 +
-`/proc/<pid>/cmdline` 认亲，认不出来的记录直接删。没有 `clean` 子命令，也没有 TTL——
+`/proc/<pid>/cmdline` 认亲，认不出来的记录直接删——包括字段写坏的（排序要读 `startedAt`，
+放过一条就是 `TypeError`）。没有 `clean` 子命令，也没有 TTL——
 登记表是缓存，不是真相，journal 才是。
 
-代价写在同一处：容器的 state 目录在镜像里，不在共享 volume 上，所以「一台机器」在容器语境下
+代价写在同一处：state 目录在 `$HOME` 下面，所以另一个用户跑的宿主既看不见、也停不掉（不是 root
+就发不了那个信号），跨账户的单实例根本没法承诺——能承诺的只是「你起的那一个」。容器的 state 目录
+在镜像里，不在共享 volume 上，所以「一台机器」在容器语境下
 就是「一个容器」。跨 PID namespace 时 pid 判活本来就不可信（见上面 `host.json` 那段），
 把登记表放进共享 volume 只会让一个容器对另一个容器的进程发信号。
+
+**`--tunnel` 是宿主的一个开关，不是第三种托管形态。** 手机不在同一网段时，`serve` 在监听起来之后
+spawn 一条 `cloudflared tunnel --url http://127.0.0.1:<port>`，从它的输出里认出随机地址，把它插到
+`urls` 的第一位再写 `host.json`——agent、索引页、手机拿到的都是这一个地址，`pageUrl()` 不用改。
+`start --tunnel` 撞上一个**没有隧道的活宿主**时会先 `stop` 再重起：加隧道改变了宿主对外是什么，
+不是重复同一次启动；已经是隧道的宿主才走幂等返回。
+隧道起不来就直接不起宿主（退出码 3），不给一个「看起来在跑、其实只对内」的假象。cloudflared 是宿主
+的子进程，退出时一起收走；SIGKILL 会留下孤儿，和 `host.json`、登记表是同一种「SIGKILL 不跑处理器」
+的已知代价。安全上有一条硬边界：cloudflared 从 `127.0.0.1` 连回宿主，所以「来源是回环」不再等于
+「请求来自本机」——宿主把 `CF-Connecting-IP` / `X-Forwarded-*` 这类头当作代理信号，并且**隧道开着时
+直接关掉 `/api/runs*`**，journal JSON 不跟着隧道出去。
 
 **拼 URL 就是一个函数，不是一层接口。** `pageIndexUrl(store)` 读 host.json，
 `pageUrl(store, ref)` 把 `pages/<runId>/<seq>-<slug>.html` 换成 `/r/<runId>/<seq>-<slug>`。
@@ -106,7 +120,7 @@ journal 故意留着它——agent 重试是一条新记录，而不是改写历
   serve.log                           start 起的后台宿主的诊断（stderr 原样落这里）
 
 ~/.local/state/report-mcp/hosts/      XDG_STATE_HOME
-  4112-7788.json                      机器级宿主登记：start 用它拒绝起第二个实例
+  4112-7788.json                      按账户的宿主登记：start 用它拒绝起第二个实例
 ```
 
 `seq` 的唯一性靠那个锁目录：`mkdir` 是原子的，临界区罩住「量文件尾巴 → 定 seq → append」。
@@ -280,6 +294,8 @@ HTTPS」。收紧靠回环默认值 + `ssh -L 7788:127.0.0.1:7788 host`，上游
   渲染器（MIT，上游生成物，sha256 门禁）。
 - **pid 判活不跨 PID namespace。** 容器里的 agent 看不见宿主机进程的 pid，
   必须用 `REPORT_MCP_PUBLIC_URL` 显式给地址，否则链接一律为 `null`（页面照写）。
+- **`--tunnel` 把页面放到公网。** 地址不可猜但公开，拿到它的人都能读完整页面，没有鉴权。
+  这是显式的 opt-in，默认不开；journal JSON（`/api/runs*`）在隧道开着时单独关掉。
 - **没有人类 → agent 的回话通道**（by design，见上）。
 - **没有外部通知。** 人不在屏幕前时不会被打扰。
 

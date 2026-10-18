@@ -15,8 +15,10 @@ export function registerHost(entry) {
         fs.mkdirSync(registryDir(), { recursive: true });
         fs.writeFileSync(fileFor(entry.pid, entry.port), JSON.stringify(entry, null, 2), "utf8");
     }
-    catch {
-        /* the host is serving; the announcement is optional */
+    catch (err) {
+        // Serving is not the problem here; `start`'s single-instance gate is. Say so on
+        // stderr instead of dropping it — otherwise the gate silently stops existing.
+        console.error(`[report-mcp] registry 写入失败（${String(err)}）：start 看不见这个宿主，可能再起一个`);
     }
 }
 export function unregisterHost(pid, port) {
@@ -27,7 +29,7 @@ export function unregisterHost(pid, port) {
         /* never had one */
     }
 }
-/** Every entry on disk. A file that does not parse is deleted on the way past. */
+/** Every entry on disk. A file that does not parse, or lies about its shape, is deleted on the way past. */
 export function registeredHosts() {
     let names;
     try {
@@ -44,7 +46,15 @@ export function registeredHosts() {
         let entry = null;
         try {
             const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-            if (Number.isInteger(raw?.pid) && Number.isInteger(raw?.port) && typeof raw?.url === "string" && typeof raw?.home === "string") {
+            // Check every field callers dereference, `startedAt` included: the sort in
+            // manage.ts would throw on a half-written entry otherwise.
+            if (Number.isInteger(raw?.pid) &&
+                Number.isInteger(raw?.port) &&
+                typeof raw?.host === "string" &&
+                typeof raw?.url === "string" &&
+                typeof raw?.home === "string" &&
+                typeof raw?.startedAt === "string" &&
+                typeof raw?.version === "string") {
                 entry = raw;
             }
         }

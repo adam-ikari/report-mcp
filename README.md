@@ -124,14 +124,16 @@ report-mcp stop               # 停掉；没在跑也算成功。--all 连别的
 
 三条都不引入新状态：`start` spawn 的就是同一个 `serve`，pid 记在 `host.json` 里（agent 侧读的也是它），`stop` 对着那个 pid 发 SIGTERM。`start` 幂等——agent 每次会话都调一次也不会撞端口。`status` 的退出码回答「在不在跑」（0/1）。
 
-一台机器只有一个宿主。`host.json` 说得了「谁在服务这个 home」，说不了「这台机器上有没有宿主」，所以 `serve` 监听从成功后还往 `$XDG_STATE_HOME/report-mcp/hosts/` 写一条登记：别的 home 已经有活宿主时，`start` 拒绝并报出对方的地址与 home（退出码 4，区别于 3 的「起不来」）。确实要第二个实例就显式给 `--port`；`stop --all` 一次停干净。登记表按 pid 判活，被 SIGKILL 留下的死记录由下一个读到它的命令删掉。
+同一个用户账户只有一个宿主（跨 home 也算，但别的用户看不见——state 目录在 `$HOME` 下面）。`host.json` 说得了「谁在服务这个 home」，说不了「这台机器上有没有宿主」，所以 `serve` 监听从成功后还往 `$XDG_STATE_HOME/report-mcp/hosts/` 写一条登记：别的 home 已经有活宿主时，`start` 拒绝并报出对方的地址与 home（退出码 4，区别于 3 的「起不来」）。确实要第二个实例就显式给 `--port`；`stop --all` 一次停干净。登记表按 pid 判活，被 SIGKILL 留下的死记录由下一个读到它的命令删掉。
+
+不在同一网段时给 `start` / `serve` 加 `--tunnel`：宿主顺带起一条 **Cloudflare Quick Tunnel**（需要 `cloudflared`），拿到一个 `https://xxx.trycloudflare.com` 并把它写进 `host.json`——agent 返回的链接、索引页、手机浏览器都走这个地址。**宿主已经在跑但还没有隧道时，`start --tunnel` 会先停掉它再重起**（加隧道改变了宿主对外是什么，不是重复同一次启动）；已经是隧道的宿主则保持幂等，不重启。隧道地址公网可达、无鉴权，宿主会在终端上明说这一句。隧道起来失败（没装 cloudflared、连不上 Cloudflare）就**不起本地宿主**，而不是悄悄退回只对内。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `GET` | `/` | 索引页：服务端渲染，按 run 分组列出已发布页面。无 JS、无 SSE、不在请求时渲染任何东西 |
 | `GET` | `/r/<runId>/<seq>-<slug>[.html]` | 页面本体 |
 | `GET` | `/api/health` | `{ok, home, pid, urls, version}`，不含 run 内容 |
-| `GET` | `/api/runs` · `/api/runs/:id` | journal JSON，**仅回环**（调试与测试） |
+| `GET` | `/api/runs` · `/api/runs/:id` | journal JSON，**仅回环**（调试与测试）；`--tunnel` 开着时整条关闭 |
 
 页面路径不由客户端给（`runId`/`seq`/`slug` 各自过校验后自己拼），realpath 必须仍在 `pages/` 内，响应头带 `immutable` + `nosniff` + `no-referrer` + `X-Frame-Options: DENY` + `CORP: same-origin`，**没有 CORS 通配**。`Accept-Encoding: gzip` 时压缩——一页几 MB 的内联图在局域网裸传会把「手机上打开」这个故事打死。
 
@@ -144,6 +146,8 @@ report-mcp stop               # 停掉；没在跑也算成功。--all 连别的
 | `REPORT_MCP_HOST` | `127.0.0.1` | **serve** 的绑定地址，`0.0.0.0` = 局域网 |
 | `REPORT_MCP_PORT` | `7788` | **serve** 的监听端口 |
 | `REPORT_MCP_PUBLIC_URL` | 自动发现 | 对外宣传的地址。容器端口映射 / 反代后面必须设 |
+| `REPORT_MCP_TUNNEL` | 关 | 非空 = `--tunnel`：起一条 Cloudflare Quick Tunnel，地址进 `host.json` |
+| `REPORT_MCP_CLOUDFLARED` | `cloudflared` | `--tunnel` 用的可执行文件路径（默认从 PATH 找） |
 | `XDG_STATE_HOME` | `~/.local/state` | 宿主登记表目录（`report-mcp/hosts/`）。容器里每个 home 各自跑一个宿主时指到各自的可写目录，否则 `start` 会看见别人的实例并拒绝 |
 
 诊断信息全部打 **stderr**，stdout 只有 JSON-RPC。
@@ -161,7 +165,7 @@ report-mcp serve --host 0.0.0.0
 [report-mcp] 注意      绑的是 0.0.0.0：同网段任何设备都能读这些汇报，没有鉴权也没有 TLS。
 ```
 
-**无鉴权，而且后果比旧版直观**：`0.0.0.0` 现在意味着同一网段任何设备都能读到一份份**完整的汇报文档**。别把它映射到公网；要收紧就回到回环 + `ssh -L 7788:127.0.0.1:7788 host`。
+**无鉴权，而且后果比旧版直观**：`0.0.0.0` 现在意味着同一网段任何设备都能读到一份份**完整的汇报文档**。别把它映射到公网；要收紧就回到回环 + `ssh -L 7788:127.0.0.1:7788 host`。真要跨网段（不在同一 Wi-Fi 的手机，或者随手分享），用 `--tunnel`——这是唯一一条**故意**把内容放到公网的路径，地址不可猜但公开，宿主会把它打在终端上提醒你。
 
 放后台不会把这条警告塞进日志里藏起来——`start` 把它打在终端上：
 
@@ -216,7 +220,7 @@ report-mcp --version    # report-mcp 0.4.0
 ```bash
 npm install
 npm run build       # tsc → dist/
-npm test            # 构建 + 八套测试（202 条断言）
+npm test            # 构建 + 九套测试（228 条断言）
 npm run typecheck
 node dist/index.js serve --port 7789   # 本地起宿主
 ```
@@ -229,7 +233,8 @@ src/
   render.ts     一次 spawn：草稿进、页面出、错误原样带回
   host.ts       serve：路由、索引页、地址枚举、响应头
   manage.ts     start/stop/status：spawn 宿主、按 host.json 的 pid 收摊、认进程再发信号
-  registry.ts   机器级宿主登记表（$XDG_STATE_HOME/report-mcp/hosts）：start 用它拒绝起第二个实例
+  registry.ts   按账户的宿主登记表（$XDG_STATE_HOME/report-mcp/hosts）：start 用它拒绝起第二个实例
+  tunnel.ts     Cloudflare Quick Tunnel：起 cloudflared、认出隧道地址、退出时收走进程
   summarize.ts  从记录重算 RunSummary
   types.ts      四种记录的判别联合
 vendor/am/      am.mjs + LICENSE + manifest.json + README.md（生成物，sha 门禁）
@@ -237,7 +242,7 @@ examples/       三份真草稿 → docs/public/reports/
 scripts/        update-am.mjs / check-vendor.mjs / render-samples.mjs
 docs/           VitePress 文档站（独立 package.json）
 Dockerfile / docker-compose.yml   常驻宿主
-test/           run.mjs 编排 + 八套
+test/           run.mjs 编排 + 九套
 ```
 
 测试套件、vendor 升版、CI 门禁、Pages 发布链路，见 [docs/contributing.md](docs/contributing.md)。

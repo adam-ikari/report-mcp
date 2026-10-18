@@ -250,8 +250,8 @@ export async function connectMcp(env, { args = [], serverPath = SERVER, timeout 
  */
 export async function startServe({ home, port, host = "127.0.0.1", env = {}, args = [] }, { timeout = 8000 } = {}) {
   const proc = spawn("node", [SERVER, "serve", "--host", host, "--port", String(port), ...args], {
-    // The host registry is machine-wide; a suite that registers its throwaway host in
-    // the real ~/.local/state would make a later `start` on this box refuse.
+    // The host registry is per-account; a suite that registers its throwaway host in
+    // the real ~/.local/state would make a later `start` under this user refuse.
     env: { ...process.env, REPORT_MCP_HOME: home, XDG_STATE_HOME: path.join(home, ".state"), AM_NO_UPDATE_CHECK: "1", ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });

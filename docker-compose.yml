@@ -49,6 +49,10 @@ services:
       # Set this when the address the human types is not the one the container can
       # discover — a reverse proxy, or a mapped port on a different host name.
       # REPORT_MCP_PUBLIC_URL: http://reports.lan.example:7788
+      # `--tunnel` (REPORT_MCP_TUNNEL) is NOT wired up here: the image has no
+      # cloudflared, and a quick tunnel would advertise an address this container
+      # cannot be reached at anyway. Run `report-mcp serve --tunnel` on the machine
+      # that has cloudflared if that is what you need.
     volumes:
       - report-mcp:/data
     # The image runs as `node` (uid 1000). A named volume is created root-owned,

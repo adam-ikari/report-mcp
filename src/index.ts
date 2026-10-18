@@ -11,7 +11,7 @@
  *   report-mcp start    same thing, in the background: spawn `serve` detached, its
  *                       diagnostics to $HOME/serve.log. `stop` and `status` finish
  *                       the pair, so nobody has to own a terminal to read reports.
- *                       One instance per machine: a live host registered by another
+ *                       One instance per account: a live host registered by another
  *                       home makes this refuse, unless a port was named.
  *
  * stdout is reserved for MCP JSON-RPC in the first mode — every diagnostic goes to
@@ -34,8 +34,10 @@ const USAGE = [
   "用法：",
   "  report-mcp                MCP server（stdio）。不监听端口，随会话生灭。",
   "  report-mcp serve          常驻只读宿主，索引页 + /r/ 页面。前台跑，Ctrl-C 停。",
-  "  report-mcp start          把同一个宿主放到后台（日志写 $HOME/serve.log）。一台机器只一个",
+  "  report-mcp start          把同一个宿主放到后台（日志写 $HOME/serve.log）。一个账户只一个",
   "                            实例：别的 home 已有活宿主就拒绝（退出码 4），除非显式 --port。",
+  "                            加 --tunnel 同时开一条 Cloudflare Quick Tunnel（需 cloudflared），",
+  "                            隧道地址写进 host.json；serve 同样认，已在跑且无隧道时会先重启。",
   "  report-mcp stop           停掉后台宿主。没在跑也算成功（幂等，agent 可以放心调）。",
   "                            --all 连别的 home 的宿主一起停。",
   "  report-mcp status         宿主在不在跑、地址、home、页数。--json 给 agent 读。",
@@ -47,6 +49,8 @@ const USAGE = [
   "  REPORT_MCP_HOST            serve/start 绑定地址（默认 127.0.0.1；0.0.0.0 = 同网段都能读，",
   "                             无鉴权无 TLS —— 那些页面是完整的汇报文档）",
   "  REPORT_MCP_PUBLIC_URL      对外宣传的地址（容器内端口映射时地址自动发现不可用，用这个）",
+  "  REPORT_MCP_TUNNEL          非空即等于 --tunnel（1 / true / yes）",
+  "  REPORT_MCP_CLOUDFLARED     cloudflared 可执行文件路径（默认从 PATH 找）",
   "  REPORT_MCP_RUN_ID          多个 MCP 进程共用一个 run",
   "  XDG_STATE_HOME             宿主登记表目录（默认 ~/.local/state）；容器里每个 home 各起一个",
   "                             宿主时指到各自的可写目录，否则 start 会看见别人的实例",
@@ -60,6 +64,13 @@ function flag(args: string[], name: string): string | undefined {
   if (i < 0) return undefined;
   const arg = args[i];
   return arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : args[i + 1];
+}
+
+/** `--tunnel` on the command line, or REPORT_MCP_TUNNEL in the environment. */
+function tunnelRequested(args: string[]): boolean {
+  if (args.includes("--tunnel")) return true;
+  const v = process.env.REPORT_MCP_TUNNEL?.trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
 }
 
 /** Where to bind and which home, resolved the same way for `serve` and `start`. */
@@ -81,14 +92,15 @@ function bind(args: string[]): { store: Store; host: string; port: number; expli
 
 async function serve(args: string[]): Promise<void> {
   const { store, host, port } = bind(args);
+  const tunnel = tunnelRequested(args);
 
   let server;
   try {
-    server = await startHost(store, { host, port, version: VERSION });
+    server = await startHost(store, { host, port, version: VERSION, tunnel });
   } catch (err) {
     // One HTTP host per home: nothing here takes over, queues, or picks a random port.
     // A second `serve` is a mistake, so say which host is already there and stop.
-    const e = err as NodeJS.ErrnoException;
+    const e = err as NodeJS.ErrnoException & { tunnelTail?: string };
     if (e?.code === "EADDRINUSE") {
       const other = store.readHostState();
       console.error(`[report-mcp] serve   端口 ${port} 已被占用，本进程退出。`);
@@ -104,6 +116,14 @@ async function serve(args: string[]): Promise<void> {
       console.error(`[report-mcp]           home ${store.home}`);
       process.exit(3);
     }
+    if (e?.tunnelTail !== undefined) {
+      // They asked for a public URL and there is none; a local-only host would be a
+      // quiet bait-and-switch, so say why and leave the pages on disk.
+      console.error(`[report-mcp] 起隧道失败：${e.message}`);
+      if (e.tunnelTail) for (const line of e.tunnelTail.split("\n")) console.error(`[report-mcp]          ${line}`);
+      console.error("[report-mcp]          去掉 --tunnel 可以只跑本地宿主；页面照常在磁盘上。");
+      process.exit(3);
+    }
     throw err;
   }
 
@@ -113,6 +133,9 @@ async function serve(args: string[]): Promise<void> {
   console.error(`[report-mcp] home     ${store.home}`);
   if (host === "0.0.0.0" || host === "::") {
     console.error("[report-mcp] 注意      绑的是 0.0.0.0：同网段任何设备都能读这些汇报，没有鉴权也没有 TLS。");
+  }
+  if (server.tunnel) {
+    console.error("[report-mcp] 注意      隧道地址公网可达：拿到链接的人都能读，无鉴权。");
   }
 
   let closing = false;
@@ -137,7 +160,7 @@ async function serve(args: string[]): Promise<void> {
  */
 async function manage(cmd: string, args: string[]): Promise<void> {
   const { store, host, port, explicitPort } = bind(args);
-  const opts = { host, port, version: VERSION, explicitPort };
+  const opts = { host, port, version: VERSION, explicitPort, tunnel: tunnelRequested(args) };
   const palette = process.stdout.isTTY && !args.includes("--json") ? ANSI : NO_COLOR;
 
   if (cmd === "start") {
@@ -161,6 +184,9 @@ async function manage(cmd: string, args: string[]): Promise<void> {
       process.exit(3);
     }
     process.stdout.write(`${describe(s, opts, palette)}\n`);
+    if (s.restarted) {
+      process.stdout.write(`${palette.dim}·${palette.off} 已在跑的宿主没有隧道，已重启并加上\n`);
+    }
     return;
   }
 
@@ -177,8 +203,9 @@ async function manage(cmd: string, args: string[]): Promise<void> {
     }
     if (args.includes("--json")) process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
     else if (r.stopped) {
+      const mine = r.pid ? `pid ${r.pid}` : "本 home 没有宿主";
       const also = r.also?.length ? `，另有 ${r.also.length} 个别的 home 的宿主（pid ${r.also.join(", ")}）` : "";
-      process.stdout.write(`${palette.green}✓${palette.off} 已停止（pid ${r.pid ?? "—"}）${also}，页面还在磁盘上\n`);
+      process.stdout.write(`${palette.green}✓${palette.off} 已停止（${mine}）${also}，页面还在磁盘上\n`);
     } else process.stdout.write(`${palette.dim}·${palette.off} 本来就没在跑\n`);
     return;
   }

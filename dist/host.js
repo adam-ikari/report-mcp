@@ -4,6 +4,7 @@ import path from "node:path";
 import fsp from "node:fs/promises";
 import zlib from "node:zlib";
 import { registerHost, unregisterHost } from "./registry.js";
+import { startQuickTunnel } from "./tunnel.js";
 /**
  * The hosting side: the one HTTP server that serves report pages
  * (`report-mcp serve`), and the two functions the MCP process uses to turn a
@@ -203,9 +204,17 @@ function json(res, status, body) {
     });
     res.end(text);
 }
+/**
+ * Headers a proxy (Cloudflare's tunnel included) adds on the way in. cloudflared
+ * connects to the origin from 127.0.0.1, so the socket address alone cannot tell a
+ * tunneled request from a local one — these are the tell. A local client that forges
+ * them only locks itself out of endpoints it could already reach.
+ */
+const PROXY_HEADERS = ["cf-connecting-ip", "cf-ray", "x-forwarded-for", "x-forwarded-proto", "x-real-ip", "forwarded"];
 function isLoopback(req) {
     const addr = req.socket.remoteAddress ?? "";
-    return addr === "127.0.0.1" || addr === "::1" || addr.startsWith("127.") || addr.startsWith("::ffff:127.");
+    const loop = addr === "127.0.0.1" || addr === "::1" || addr.startsWith("127.") || addr.startsWith("::ffff:127.");
+    return loop && !PROXY_HEADERS.some((h) => req.headers[h] !== undefined);
 }
 const PAGE_HEADERS = {
     "Content-Type": "text/html; charset=utf-8",
@@ -240,9 +249,11 @@ export async function startHost(store, opts) {
             json(res, 200, { ok: true, home: store.home, pid: process.pid, urls, version: opts.version });
             return;
         }
-        // Journal dumps are for debugging this machine, not for the LAN.
+        // Journal dumps are for debugging this machine, not the LAN — and not a tunnel out
+        // to the internet. A tunneled request arrives from 127.0.0.1, so the socket address
+        // is not enough to tell them apart: when a tunnel is up, these routes are simply off.
         if (p === "/api/runs" || p.startsWith("/api/runs/")) {
-            if (!isLoopback(req)) {
+            if (!isLoopback(req) || opts.tunnel) {
                 json(res, 404, { error: "not found" });
                 return;
             }
@@ -339,12 +350,28 @@ export async function startHost(store, opts) {
     // cannot open; the override is how the operator says "the reachable address is this".
     const override = process.env.REPORT_MCP_PUBLIC_URL?.trim().replace(/\/+$/, "");
     const urls = override ? [override, ...discovered.filter((u) => u !== override)] : discovered;
+    // The tunnel is opened only after the listener is up, and its address goes first:
+    // that is the URL an agent hands back, and a phone off the Wi-Fi is why it exists.
+    let tunnel = null;
+    if (opts.tunnel) {
+        try {
+            tunnel = await startQuickTunnel(`http://${selfHost}:${port}`);
+            urls.unshift(tunnel.url);
+        }
+        catch (err) {
+            // No tunnel, no host: the caller asked for a public address and did not get one,
+            // so do not leave a local-only listener behind pretending otherwise.
+            await new Promise((resolve) => server.close(() => resolve()));
+            throw err;
+        }
+    }
     // Both announcements are pid-guarded and idempotent: `close()` and the `exit`
     // handler can each run, and a SIGKILL runs neither — which is why every reader
     // checks the pid instead of trusting the file.
     const startedAt = new Date().toISOString();
     const registration = { pid: process.pid, port, host: opts.host, url: urls[0], home: store.home, startedAt, version: opts.version };
     const retire = () => {
+        tunnel?.close();
         store.clearHostState();
         unregisterHost(registration.pid, registration.port);
     };
@@ -355,6 +382,7 @@ export async function startHost(store, opts) {
         url: urls[0],
         urls,
         port,
+        ...(tunnel ? { tunnel: tunnel.url } : {}),
         close() {
             return new Promise((resolve) => {
                 retire();

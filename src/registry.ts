@@ -3,10 +3,13 @@ import os from "node:os";
 import path from "node:path";
 
 /**
- * The machine-level host registry: one small file per running host, kept outside the
- * report home on purpose. `host.json` answers "who serves *this* home"; this answers
- * "is any host running on this box at all", which is the question `start` has to ask
- * before it makes a second one.
+ * The host registry for this user account: one small file per running host, kept
+ * outside the report home on purpose. `host.json` answers "who serves *this* home";
+ * this answers "do I already have a host running", which is the question `start` has
+ * to ask before it makes a second one.
+ *
+ * Scope is the account, not the kernel: the state directory lives under `$HOME`, and
+ * a host owned by another user is neither visible here nor stoppable from here.
  *
  * Entries are best effort, like every other announcement here: a read-only state
  * directory costs at worst a duplicate host, never a crash in the serving path.
@@ -37,8 +40,10 @@ export function registerHost(entry: HostRegistration): void {
   try {
     fs.mkdirSync(registryDir(), { recursive: true });
     fs.writeFileSync(fileFor(entry.pid, entry.port), JSON.stringify(entry, null, 2), "utf8");
-  } catch {
-    /* the host is serving; the announcement is optional */
+  } catch (err) {
+    // Serving is not the problem here; `start`'s single-instance gate is. Say so on
+    // stderr instead of dropping it — otherwise the gate silently stops existing.
+    console.error(`[report-mcp] registry 写入失败（${String(err)}）：start 看不见这个宿主，可能再起一个`);
   }
 }
 
@@ -50,7 +55,7 @@ export function unregisterHost(pid: number, port: number): void {
   }
 }
 
-/** Every entry on disk. A file that does not parse is deleted on the way past. */
+/** Every entry on disk. A file that does not parse, or lies about its shape, is deleted on the way past. */
 export function registeredHosts(): HostRegistration[] {
   let names: string[];
   try {
@@ -65,7 +70,17 @@ export function registeredHosts(): HostRegistration[] {
     let entry: HostRegistration | null = null;
     try {
       const raw = JSON.parse(fs.readFileSync(file, "utf8")) as HostRegistration;
-      if (Number.isInteger(raw?.pid) && Number.isInteger(raw?.port) && typeof raw?.url === "string" && typeof raw?.home === "string") {
+      // Check every field callers dereference, `startedAt` included: the sort in
+      // manage.ts would throw on a half-written entry otherwise.
+      if (
+        Number.isInteger(raw?.pid) &&
+        Number.isInteger(raw?.port) &&
+        typeof raw?.host === "string" &&
+        typeof raw?.url === "string" &&
+        typeof raw?.home === "string" &&
+        typeof raw?.startedAt === "string" &&
+        typeof raw?.version === "string"
+      ) {
         entry = raw;
       }
     } catch {

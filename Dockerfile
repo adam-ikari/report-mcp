@@ -52,6 +52,10 @@ USER node
 EXPOSE 7788
 VOLUME ["/data"]
 
+# No cloudflared here: `serve --tunnel` needs it on PATH and this image does not carry
+# it. The container's public-access story is REPORT_MCP_PUBLIC_URL plus a mapped port
+# or a reverse proxy in front — see docker-compose.yml.
+
 # The host's own health endpoint: no MCP handshake, no stdio, safe to probe.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.REPORT_MCP_PORT||7788)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"

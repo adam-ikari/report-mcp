@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { Store } from "./store.js";
 import { LAN_WARNING } from "./host.js";
 import { registeredHosts, removeHost, type HostRegistration } from "./registry.js";
+import { TUNNEL_TIMEOUT_MS, isTunnelUrl } from "./tunnel.js";
 
 /**
  * `start` / `stop` / `status`: a human or an agent turning the one HTTP host for
@@ -17,7 +18,7 @@ import { registeredHosts, removeHost, type HostRegistration } from "./registry.j
  * supervision protocol — `stop` reads the pid out of it and sends SIGTERM, which
  * is the signal `serve` already shuts down on.
  *
- * `start` also reads the machine-wide registry (`src/registry.ts`), because one host
+ * `start` also reads the per-account registry (`src/registry.ts`), because one host
  * per *home* would still let a second home quietly take a second port.
  */
 
@@ -29,6 +30,8 @@ export interface ManageOptions {
   version: string;
   /** Someone named a port, so a second host elsewhere on the box is what they asked for. */
   explicitPort: boolean;
+  /** Bring the host up behind a Cloudflare Quick Tunnel. */
+  tunnel: boolean;
 }
 
 export interface Status {
@@ -42,8 +45,10 @@ export interface Status {
   log?: string;
   runs?: number;
   pages?: number;
-  /** Hosts serving some other home on this machine. */
+  /** Hosts serving some other home under this account. */
   others?: { url: string; home: string; pid: number }[];
+  /** Set by `start` when an existing, tunnel-less host was replaced to add one. */
+  restarted?: boolean;
 }
 
 function alive(pid: number): boolean {
@@ -59,6 +64,10 @@ function alive(pid: number): boolean {
  * A pid is only ours if its command line says so. Without this, a stale
  * `host.json` whose pid got recycled by an unrelated process would get SIGTERM
  * from a tool that has no business killing it.
+ *
+ * On platforms without procfs the check degrades to liveness only, and `stop --all`
+ * — the one command that reaches pids this home never owned — is where that exposure
+ * widens. Asking each candidate's own `/api/health` would close it; v0.4 does not.
  */
 function isServe(pid: number): boolean {
   let raw: string;
@@ -91,7 +100,7 @@ function liveHost(store: Store): { pid: number; url: string } | null {
 }
 
 /**
- * Live hosts serving some *other* home on this machine. Entries whose pid is gone,
+ * Live hosts serving some *other* home under this account. Entries whose pid is gone,
  * or is now some unrelated process, are deleted here rather than left to accumulate.
  */
 function otherHosts(store: Store): HostRegistration[] {
@@ -112,21 +121,30 @@ export async function startHostProcess(store: Store, opts: ManageOptions): Promi
 
   // Idempotent: an agent that starts the host on every session must not fail
   // because a session already did it.
-  if (liveHost(store)) return status(store);
+  let restarted = false;
+  const live = liveHost(store);
+  if (live) {
+    // Asking for a tunnel when the live host has none changes what the host *is*,
+    // not just how it was started: replace it. A live tunnel is the same start, so
+    // it stays idempotent. A host that already has one is never restarted by `start`.
+    if (!opts.tunnel || isTunnelUrl(live.url)) return status(store);
+    await stopHostProcess(store);
+    restarted = true;
+  }
 
-  // One instance per machine, unless a port was named. A second host nobody asked
+  // One instance per account, unless a port was named. A second host nobody asked
   // for means two indexes, two sets of links, and no way to tell which one a page
   // was published against.
   const others = otherHosts(store);
   if (others.length && !opts.explicitPort) {
     const who = others.map((h) => `${h.url}（home ${h.home}，pid ${h.pid}）`).join("、");
     throw Object.assign(
-      new Error(`这台机器上已经有宿主在跑：${who}。start 只起一个实例——先停掉它（report-mcp stop --all），确实要第二个就显式给 --port`),
+      new Error(`这个账户下已经有宿主在跑：${who}。start 只起一个实例——先停掉它（report-mcp stop --all），确实要第二个就显式给 --port`),
       { conflict: others },
     );
   }
 
-  const child = spawn(process.execPath, [SELF, "serve", "--host", opts.host, "--port", String(opts.port)], {
+  const child = spawn(process.execPath, [SELF, "serve", "--host", opts.host, "--port", String(opts.port), ...(opts.tunnel ? ["--tunnel"] : [])], {
     detached: true,
     stdio: ["ignore", fs.openSync(log, "a"), fs.openSync(log, "a")],
     env: process.env,
@@ -149,7 +167,10 @@ export async function startHostProcess(store: Store, opts: ManageOptions): Promi
     });
   });
 
-  const up = await Promise.race([settled(4000, () => liveHost(store)), settledChild.then(() => null)]);
+  // A tunnel has to reach Cloudflare before host.json exists, so readiness waits longer
+  // when one was asked for — the host is not up until its public address is.
+  const budget = opts.tunnel ? TUNNEL_TIMEOUT_MS + 5000 : 4000;
+  const up = await Promise.race([settled(budget, () => liveHost(store)), settledChild.then(() => null)]);
   if (!up) {
     await Promise.race([settledChild, settle(200)]);
     await settle(200); // the child's own last lines reach the log just after it exits
@@ -161,11 +182,12 @@ export async function startHostProcess(store: Store, opts: ManageOptions): Promi
         /* already gone */
       }
     }
-    throw Object.assign(problem ?? new Error(`4s 内没写出 host.json（已终止 pid ${String(child.pid)}）`), {
+    throw Object.assign(problem ?? new Error(`${Math.round(budget / 1000)}s 内没写出 host.json（已终止 pid ${String(child.pid)}）`), {
       logTail: tail(log),
     });
   }
-  return status(store);
+  const out = await status(store);
+  return restarted ? { ...out, restarted: true } : out;
 }
 
 function tail(file: string, bytes = 1200): string {
@@ -243,13 +265,16 @@ export function describe(s: Status, opts: ManageOptions, a: Palette = ANSI): str
   }
   // Off-loopback URLs, not the flags someone just typed: this is the host that
   // is actually running, and `--host 0.0.0.0` is how it got readable by the floor.
-  const wild = (s.urls ?? []).some((u) => !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|$)/.test(u));
+  // A tunnel address is off-loopback too, but it is not a wildcard bind: excluding it
+  // here keeps the LAN warning about the LAN.
+  const wild = (s.urls ?? []).some((u) => !isTunnelUrl(u) && !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|$)/.test(u));
   return [
     `${a.green}✓${a.off} 宿主在跑 ${a.bold}${s.url}/${a.off} ${a.dim}(pid ${s.pid} · v${s.version} · 自 ${s.startedAt})${a.off}`,
     ...(s.urls ?? []).slice(1).map((u) => `    备选  ${u}/`),
     `${a.dim}home${a.off}    ${s.home}`,
     `${a.dim}内容${a.off}    ${s.runs} 次汇报 · ${s.pages} 页`,
     `${a.dim}日志${a.off}    ${s.log}`,
+    ...(s.url && isTunnelUrl(s.url) ? [`${a.yellow}注意${a.off}    隧道地址公网可达：拿到链接的人都能读，无鉴权。`] : []),
     ...others,
     ...(wild ? [`${a.yellow}注意${a.off}    ${LAN_WARNING}`] : []),
   ].join("\n");
